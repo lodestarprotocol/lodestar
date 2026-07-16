@@ -6,6 +6,7 @@ import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IER
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {LodestarOracle} from "./LodestarOracle.sol";
 import {LodestarPool} from "./LodestarPool.sol";
 import {IDexRouter} from "./interfaces/IDexRouter.sol";
@@ -18,6 +19,7 @@ import {IDexRouter} from "./interfaces/IDexRouter.sol";
 ///         surplus (incl. accrued collateral yield) returns to the borrower.
 contract LodestarLoanBook is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
+    using SafeCast for uint256;
 
     struct Tier {
         uint16 ltvBps; // loan-to-value in bps
@@ -25,13 +27,15 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         uint16 feeBps; // one-time fee in bps of principal
     }
 
+    /// @dev Packed to 6 storage slots: {principal,fee} share a slot, {principalUsd18,openedAt,dueAt}
+    ///      share a slot. uint128 comfortably holds any realistic stable amount / usd18 value.
     struct Loan {
         address borrower;
         address collateral;
         uint256 collAmount;
-        uint256 principal; // stable owed (excl. fee)
-        uint256 fee; // one-time stable fee
-        uint256 principalUsd18; // usd18 principal recorded at open (for exposure accounting)
+        uint128 principal; // stable owed (excl. fee)
+        uint128 fee; // one-time stable fee
+        uint128 principalUsd18; // usd18 principal recorded at open (for exposure accounting)
         uint64 openedAt;
         uint64 dueAt;
         bool active;
@@ -186,9 +190,9 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
             borrower: msg.sender,
             collateral: collateral,
             collAmount: collAmount,
-            principal: principal,
-            fee: fee,
-            principalUsd18: principalUsd18,
+            principal: principal.toUint128(),
+            fee: fee.toUint128(),
+            principalUsd18: principalUsd18.toUint128(),
             openedAt: uint64(block.timestamp),
             dueAt: dueAt,
             active: true
@@ -227,7 +231,7 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         Tier[] storage ts = tiers[L.collateral];
         if (tierIndex >= ts.length) revert BadTier();
 
-        uint256 addFee = (L.principal * ts[tierIndex].feeBps) / 10_000;
+        uint256 addFee = (uint256(L.principal) * ts[tierIndex].feeBps) / 10_000;
         uint64 newDue = uint64(block.timestamp + ts[tierIndex].duration);
         if (newDue > uint64(L.openedAt) + maxLoanLife) revert Expired();
 
@@ -283,15 +287,17 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
 
     /// @dev Waterfall: principal -> fee (net of reserve cut) -> penalty -> surplus to borrower.
     function _distribute(Loan storage L, uint256 proceeds) internal returns (uint256 remaining, bool shortfall) {
+        uint256 principal = L.principal;
+        uint256 fee = L.fee;
         remaining = proceeds;
 
-        uint256 payPrincipal = remaining >= L.principal ? L.principal : remaining;
+        uint256 payPrincipal = remaining >= principal ? principal : remaining;
         remaining -= payPrincipal;
         stable.safeTransfer(address(pool), payPrincipal);
-        pool.onPrincipalReturned(L.principal); // full principal cleared; any shortfall is a realized lender loss
-        shortfall = payPrincipal < L.principal;
+        pool.onPrincipalReturned(principal); // full principal cleared; any shortfall is a realized lender loss
+        shortfall = payPrincipal < principal;
 
-        uint256 payFee = remaining >= L.fee ? L.fee : remaining;
+        uint256 payFee = remaining >= fee ? fee : remaining;
         remaining -= payFee;
         if (payFee > 0) {
             uint256 rcut = (payFee * feeReserveBps) / 10_000;
@@ -299,7 +305,7 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
             if (rcut > 0) stable.safeTransfer(reserve, rcut);
         }
 
-        uint256 penalty = (L.principal * penaltyBps) / 10_000;
+        uint256 penalty = (principal * penaltyBps) / 10_000;
         uint256 payPenalty = remaining >= penalty ? penalty : remaining;
         remaining -= payPenalty;
         if (payPenalty > 0) stable.safeTransfer(reserve, payPenalty);
