@@ -27,10 +27,21 @@ made whole first, and any surplus (including collateral yield) returns to you.
 - `LodestarPool` — ERC4626 lender vault (USDT0); share price rises with fees/yield
 - `LodestarLoanBook` — open / repay / rollover / permissionless default settlement
 
+## Live
+
+- **App:** https://lodestarprotocol.xyz
+- **Network:** Coston2 testnet (chainId 114), priced by the live Coston2 FTSOv2
+- **Contracts:**
+  - `LodestarLoanBook` — [`0x85F3C3C75243Bf22dd614559e26e6A83C430D867`](https://coston2-explorer.flare.network/address/0x85F3C3C75243Bf22dd614559e26e6A83C430D867)
+  - `LodestarPool` — `0x7beEac56273f059f759d814172f674301F83eb34`
+  - `LodestarOracle` — `0xaa28E160463Aa4e9176b8c922f611eEC704b4316`
+  - collateral: FTestXRP `0x0b6A…3dc7` · stable: USD₮0 `0xC1A5…E71F`
+
 ## Status
 
-v1 scaffold — compiles, 4/4 core tests pass. **Not audited, not deployed.** See `SECURITY.md` for the bug-class defense map and the mainnet checklist.
+v1 — 8/8 tests pass (6 unit + 2 live-Flare fork), security-audited (see `SECURITY.md`), **deployed to Coston2**. Not yet mainnet; owner is a single EOA pending a multisig + timelock.
 
 ```shell
 forge build && forge test -vv
+# deploy: forge script script/Deploy.s.sol:Deploy --rpc-url $COSTON2_RPC --account lodestar-deployer --broadcast
 ```
