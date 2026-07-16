@@ -222,6 +222,8 @@ td:first-child{text-align:left}
 .onb-badge{display:flex;align-items:center;gap:8px;background:var(--pos-wash);color:var(--pos);font-weight:600;font-size:12.5px;padding:11px 13px;border-radius:10px;margin:16px 0}
 .onb-badge svg{width:15px;height:15px;flex:none;stroke:var(--pos);stroke-width:2.2;fill:none}
 .btn-block{width:100%;justify-content:center}
+.pf-cols{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media(max-width:820px){.pf-cols{grid-template-columns:1fr}}
 /* mobile */
 .menu-btn{display:none;width:34px;height:34px;place-items:center;border:1px solid var(--line-str);border-radius:8px;background:var(--card)}
 .menu-btn svg{width:18px;height:18px;stroke:var(--ink);stroke-width:2;fill:none}
@@ -368,10 +370,10 @@ td:first-child{text-align:left}
             <div class="card pad">
               <div class="lbl">Pool</div>
               <div class="prow mt" style="padding-top:0"><span class="l">Pool size</span><span class="r" id="l-tvl">$0</span></div>
-              <div class="prow"><span class="l">Utilization</span><span class="r">0%</span></div>
+              <div class="prow"><span class="l">Utilization</span><span class="r" id="l-util">0%</span></div>
               <div class="prow"><span class="l">Utilization ceiling</span><span class="r">80%</span></div>
-              <div class="prow"><span class="l">Share price</span><span class="r">1.0000</span></div>
-              <div class="prow"><span class="l">Lenders</span><span class="r">0</span></div>
+              <div class="prow"><span class="l">Share price</span><span class="r" id="l-sp">1.0000</span></div>
+              <div class="prow"><span class="l">Lenders</span><span class="r" id="l-lenders">0</span></div>
             </div>
             <div class="sec-h" style="margin-top:18px"><h2>Your position</h2></div>
             <div id="mylend"><div class="empty" style="padding:30px"><b>No deposit</b>Supply USD₮0 to start earning.</div></div>
@@ -381,8 +383,17 @@ td:first-child{text-align:left}
 
       <!-- ===================== PORTFOLIO ===================== -->
       <section class="view" id="view-portfolio">
-        <div class="sec-h first"><h2>Your positions</h2><span>connect a wallet to view</span></div>
-        <div class="empty"><svg viewBox="0 0 24 24"><path d="M3.5 7l8.5-3.8L20.5 7 12 10.8 3.5 7zM3.5 12l8.5 3.8L20.5 12M3.5 16.5l8.5 3.8 8.5-3.8"/></svg><b>No open positions</b>Borrow against FXRP, stXRP or sFLR, or supply USD₮0 to start earning.</div>
+        <div class="sec-h first"><h2>Your positions</h2><span id="pf-sub">connect a wallet to view</span></div>
+        <div class="pf-cols">
+          <div>
+            <div class="lbl" style="margin-bottom:10px">Borrowing</div>
+            <div id="pf-loans"><div class="empty"><b>Not connected</b>Connect a wallet to see your loans.</div></div>
+          </div>
+          <div>
+            <div class="lbl" style="margin-bottom:10px">Lending</div>
+            <div id="pf-lend"><div class="empty"><b>Not connected</b>Connect a wallet to see your deposit.</div></div>
+          </div>
+        </div>
       </section>
 
       <!-- ===================== WHY ===================== -->
@@ -423,7 +434,7 @@ const FXRP_ADDR="0x0b6A3645c240605887a5532109323A3E12273dc7"; // FTestXRP 6dp
 const USDT0_ADDR="0xC1A5B41512496B80903D1f32d6dEa3a73212E71F"; // USD₮0 6dp
 const FEED_XRP="0x015852502f55534400000000000000000000000000", FEED_FLR="0x01464c522f55534400000000000000000000000000";
 const FTSO_ABI=["function getFeedById(bytes21) view returns (uint256 value, int8 decimals, uint64 timestamp)"];
-const POOL_ABI=["function totalAssets() view returns (uint256)","function principalOut() view returns (uint256)"];
+const POOL_ABI=["function totalAssets() view returns (uint256)","function principalOut() view returns (uint256)","function totalSupply() view returns (uint256)"];
 const ERC20_ABI=["function approve(address,uint256) returns (bool)","function allowance(address,address) view returns (uint256)","function balanceOf(address) view returns (uint256)"];
 const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)"];
 const POOLW_ABI=["function deposit(uint256,address) returns (uint256)","function redeem(uint256,address,address) returns (uint256)","function balanceOf(address) view returns (uint256)","function convertToAssets(uint256) view returns (uint256)"];
@@ -434,7 +445,8 @@ const MK={
 };
 let COLL="FXRP", TIER=0;
 const $=id=>document.getElementById(id);
-const usd=n=>"$"+n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:n<10?4:2});
+const usd=n=>"$"+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const priceUsd=n=>"$"+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:n<1?6:4}); // asset prices need more precision
 const BAL={FXRP:0n,USDT0:0n};
 function toast(msg,type){const c=$("toasts");if(!c)return;const el=document.createElement("div");el.className="toast"+(type?" "+type:"");el.innerHTML=`<div>${msg}</div><span class="tclose" onclick="this.parentElement.remove()">✕</span>`;c.appendChild(el);setTimeout(()=>el.remove(),6500);}
 window.toggleMenu=()=>{document.querySelector(".sidebar").classList.toggle("open");$("scrim").classList.toggle("show");};
@@ -468,12 +480,12 @@ window.pickTier=i=>{TIER=i;terms();preview();};
 function setColl(k){COLL=k;TIER=0;$("collTag").textContent=MK[k].name;terms();preview();}
 function preview(){const m=MK[COLL],t=m.tiers[TIER],a=parseFloat($("amt").value)||0;const val=a*m.price,pr=val*t.ltv/100,fee=pr*t.fee/100,due=new Date(Date.now()+t.d*864e5);
   $("q-recv").textContent=usd(pr);$("q-fee").textContent=usd(fee);$("q-repay").textContent=usd(pr+fee);
-  $("q-due").textContent=due.toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"});
-  $("q-note").innerHTML=`Locking <b>${a.toLocaleString()} ${MK[COLL].name}</b> (${usd(val)}) at ${t.ltv}% LTV, priced by FTSOv2.`+(COLL!=="FXRP"?` ${MK[COLL].name} keeps earning staking yield for the full term.`:"");
-  if($("b-px"))$("b-px").textContent=m.price?usd(m.price):"…";
+  $("q-due").textContent=due.toLocaleDateString('en-US',{month:"short",day:"numeric",year:"numeric"});
+  $("q-note").innerHTML=`Locking <b>${a.toLocaleString('en-US')} ${MK[COLL].name}</b> (${usd(val)}) at ${t.ltv}% LTV, priced by FTSOv2.`+(COLL!=="FXRP"?` ${MK[COLL].name} keeps earning staking yield for the full term.`:"");
+  if($("b-px"))$("b-px").textContent=m.price?priceUsd(m.price):"…";
   if($("b-ltv"))$("b-ltv").textContent=Math.max(...m.tiers.map(x=>x.ltv))+"%";
   if($("b-fee"))$("b-fee").textContent=Math.min(...m.tiers.map(x=>x.fee)).toFixed(1)+"%";
-  const la=parseFloat($("lamt").value)||0;if($("l-shares"))$("l-shares").textContent="≈ "+la.toLocaleString()+" lodUSD₮0";}
+  const la=parseFloat($("lamt").value)||0;if($("l-shares"))$("l-shares").textContent="≈ "+la.toLocaleString('en-US')+" lodUSD₮0";}
 document.querySelectorAll('#collSeg button').forEach(b=>b.onclick=()=>{document.querySelectorAll('#collSeg button').forEach(x=>x.classList.remove('on'));b.classList.add('on');setColl(b.dataset.c);});
 $("amt").addEventListener('input',preview);$("lamt").addEventListener('input',preview);
 
@@ -481,15 +493,17 @@ function setTx(id,v){const el=$(id);if(el)el.textContent=v;}
 async function loadChain(){
   try{const p=new ethers.JsonRpcProvider(RPC);setTx("netblock","#"+await p.getBlockNumber());
     const f=new ethers.Contract(FTSO,FTSO_ABI,p),pool=new ethers.Contract(POOL,POOL_ABI,p);
-    const [xrp,flr,ta,po]=await Promise.all([f.getFeedById(FEED_XRP),f.getFeedById(FEED_FLR),pool.totalAssets(),pool.principalOut()]);
+    const [xrp,flr,ta,po,ts]=await Promise.all([f.getFeedById(FEED_XRP),f.getFeedById(FEED_FLR),pool.totalAssets(),pool.principalOut(),pool.totalSupply()]);
     const px=v=>Number(v.value)/10**Number(v.decimals);
     // FXRP priced by FTSO XRP/USD; sFLR/stXRP approx on testnet (rate providers are mainnet-only)
     MK.FXRP.price=px(xrp);MK.STXRP.price=px(xrp);MK.SFLR.price=px(flr);
-    for(const k of Object.keys(MK)){const el=$("px-"+k);if(el)el.textContent=usd(MK[k].price);}
+    for(const k of Object.keys(MK)){const el=$("px-"+k);if(el)el.textContent=priceUsd(MK[k].price);}
     // real on-chain pool stats (USD₮0, 6dp)
     const tvl=Number(ta)/1e6, borrowed=Number(po)/1e6, util=tvl>0?100*borrowed/tvl:0;
     setTx("d-tvl",usd(tvl));setTx("d-borrowed",usd(borrowed));setTx("d-util",util.toFixed(1)+"% utilization");
-    setTx("l-tvl",usd(tvl));setTx("d-lenders",tvl>0?"1":"0");
+    const lenders=tvl>0?"1":"0"; const sp=Number(ts)>0?(Number(ta)/1e6)/(Number(ts)/1e12):1;
+    setTx("l-tvl",usd(tvl));setTx("d-lenders",lenders);
+    setTx("l-util",util.toFixed(1)+"%");setTx("l-lenders",lenders);setTx("l-sp",sp.toLocaleString('en-US',{minimumFractionDigits:4,maximumFractionDigits:4}));
     preview();
   }catch(e){setTx("netblock","offline");console.error(e);}
 }
@@ -515,6 +529,9 @@ function disconnectWallet(){
   const av=document.querySelector(".acct .av"); if(av) av.textContent="L";
   $("borrowBtn").textContent="Connect wallet"; $("lendBtn").textContent="Connect wallet";
   setTx("balFXRP","—"); setTx("balUSDT0","—");
+  if($("pf-loans")) $("pf-loans").innerHTML=emptyHTML("Not connected","Connect a wallet to see your loans.");
+  if($("pf-lend")) $("pf-lend").innerHTML=emptyHTML("Not connected","Connect a wallet to see your deposit.");
+  if($("pf-sub")) $("pf-sub").textContent="connect a wallet to view";
 }
 async function connectWith(eip, eager){
   try{
@@ -560,8 +577,8 @@ async function fetchBalances(){
       new ethers.Contract(USDT0_ADDR,ERC20_ABI,rp).balanceOf(account)
     ]);
     BAL.FXRP=fb; BAL.USDT0=ub;
-    setTx("balFXRP",(Number(fb)/1e6).toLocaleString(undefined,{maximumFractionDigits:2}));
-    setTx("balUSDT0",(Number(ub)/1e6).toLocaleString(undefined,{maximumFractionDigits:2}));
+    setTx("balFXRP",(Number(fb)/1e6).toLocaleString('en-US',{maximumFractionDigits:2}));
+    setTx("balUSDT0",(Number(ub)/1e6).toLocaleString('en-US',{maximumFractionDigits:2}));
   }catch(e){ console.error("balances",e); }
 }
 $("connect").onclick=openWalletPicker;
@@ -616,18 +633,23 @@ async function loadPositions(){
   try{
     const rp=new ethers.JsonRpcProvider(RPC);
     const book=new ethers.Contract(BOOK,[...BOOK_ABI,"function nextLoanId() view returns (uint256)"],rp);
-    const n=Number(await book.nextLoanId()); let out="";
+    const n=Number(await book.nextLoanId()); let out=""; let loanCount=0;
     for(let id=1;id<n;id++){ const L=await book.loans(id);
-      if(L.active && L.borrower.toLowerCase()===account.toLowerCase()){ const due=L.principal+L.fee;
-        out+=`<div class="posrow"><div><b>${(Number(L.collAmount)/1e6).toLocaleString()} FXRP</b><small>borrowed ${usd(Number(L.principal)/1e6)} · repay ${usd(Number(due)/1e6)} by ${new Date(Number(L.dueAt)*1000).toLocaleDateString()}</small></div><div class="posr"><button class="btn btn-red btn-sm" onclick="doRepay('${id}','${due}')">Repay</button></div></div>`;
+      if(L.active && L.borrower.toLowerCase()===account.toLowerCase()){ const due=L.principal+L.fee; loanCount++;
+        out+=`<div class="posrow"><div><b>${(Number(L.collAmount)/1e6).toLocaleString('en-US')} FXRP</b><small>borrowed ${usd(Number(L.principal)/1e6)} · repay ${usd(Number(due)/1e6)} by ${new Date(Number(L.dueAt)*1000).toLocaleDateString('en-US',{month:"short",day:"numeric",year:"numeric"})}</small></div><div class="posr"><button class="btn btn-red btn-sm" onclick="doRepay('${id}','${due}')">Repay</button></div></div>`;
       }
     }
-    if($("myloans")) $("myloans").innerHTML=out||emptyHTML("No open loans","Lock collateral above to borrow.");
+    const loanHTML=out||emptyHTML("No open loans","Lock collateral to borrow.");
+    if($("myloans")) $("myloans").innerHTML=loanHTML;
+    if($("pf-loans")) $("pf-loans").innerHTML=loanHTML;
     const pool=new ethers.Contract(POOL,POOLW_ABI,rp);
     const sh=await pool.balanceOf(account), val=sh>0n?await pool.convertToAssets(sh):0n;
-    if($("mylend")) $("mylend").innerHTML = sh>0n
-      ? `<div class="posrow"><div><b>${usd(Number(val)/1e6)}</b><small>${(Number(sh)/1e12).toLocaleString(undefined,{maximumFractionDigits:2})} lodUSD₮0 · redeemable anytime</small></div><button class="btn btn-ln btn-sm" onclick="doWithdraw()">Withdraw</button></div>`
+    const lendHTML = sh>0n
+      ? `<div class="posrow"><div><b>${usd(Number(val)/1e6)}</b><small>${(Number(sh)/1e12).toLocaleString('en-US',{maximumFractionDigits:2})} lodUSD₮0 · redeemable anytime</small></div><button class="btn btn-ln btn-sm" onclick="doWithdraw()">Withdraw</button></div>`
       : emptyHTML("No deposit","Supply USD₮0 to start earning.");
+    if($("mylend")) $("mylend").innerHTML=lendHTML;
+    if($("pf-lend")) $("pf-lend").innerHTML=lendHTML;
+    if($("pf-sub")){ const parts=[]; if(loanCount) parts.push(loanCount+(loanCount>1?" loans":" loan")); if(sh>0n) parts.push("supplying "+usd(Number(val)/1e6)); $("pf-sub").textContent = parts.length?parts.join(" · "):"no open positions yet"; }
   }catch(e){ console.error("positions",e); }
 }
 function refreshAll(){ loadChain(); loadPositions(); fetchBalances(); }
