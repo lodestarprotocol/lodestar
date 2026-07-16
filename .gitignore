@@ -30,3 +30,10 @@ web/belay-shot.png
 # OS
 .DS_Store
 Thumbs.db
+
+# local render/screenshot artifacts (dev only)
+web/*-check.png
+web/v-*.png
+web/view-*.png
+web/lodestar-*.png
+web/belay-shot.png

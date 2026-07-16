@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet" />
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{width:1200px;height:630px;overflow:hidden;font-family:Inter,sans-serif;background:#F5F5F7;color:#0A0A0B;position:relative}
+/* red beam in the corner, echoing the mark */
+.beam{position:absolute;top:-120px;right:-120px;width:620px;height:620px;background:
+  conic-gradient(from 210deg at 50% 50%, transparent 0deg, #D4002A22 40deg, #D4002A55 70deg, transparent 120deg);
+  filter:blur(2px)}
+.beam2{position:absolute;top:-40px;right:-40px;width:360px;height:360px;background:radial-gradient(circle at 70% 30%, #D4002A18, transparent 60%)}
+.bar{position:absolute;top:0;left:0;right:0;height:6px;background:#D4002A}
+.wrap{position:relative;padding:64px 72px;height:100%;display:flex;flex-direction:column}
+.brand{display:flex;align-items:center;gap:14px}
+.brand img{height:44px}
+.brand b{font-size:34px;font-weight:800;color:#D4002A;letter-spacing:-.03em}
+.chip{margin-left:16px;font-family:"IBM Plex Mono",monospace;font-size:14px;font-weight:500;color:#9A6B00;background:#FDF7E8;border:1px solid #F0DCA8;border-radius:8px;padding:6px 12px;letter-spacing:.02em}
+.mid{margin-top:auto;margin-bottom:auto}
+h1{font-size:82px;line-height:1.0;letter-spacing:-.035em;font-weight:800;max-width:16ch}
+h1 .r{color:#D4002A}
+.sub{margin-top:26px;font-size:27px;color:#3B3B42;font-weight:500;max-width:30ch;line-height:1.35}
+.foot{display:flex;align-items:center;justify-content:space-between}
+.url{font-size:26px;font-weight:700;letter-spacing:-.01em}
+.tags{display:flex;gap:10px}
+.tag{font-size:17px;font-weight:600;color:#3B3B42;background:#fff;border:1px solid #E4E4E8;border-radius:999px;padding:9px 16px}
+.tag.g{color:#0A8A57;border-color:transparent;background:#E9F6F0}
+</style>
+</head>
+<body>
+  <div class="bar"></div>
+  <div class="beam"></div>
+  <div class="beam2"></div>
+  <div class="wrap">
+    <div class="brand"><img src="assets/logo-mark.png" alt=""/><b>lodestar</b><span class="chip">on Flare</span></div>
+    <div class="mid">
+      <h1>Borrow against <span class="r">XRP</span> &amp; <span class="r">FLR</span>. No liquidations.</h1>
+      <div class="sub">Lock FXRP or sFLR, take USD₮0, repay by a deadline. Only the calendar can close your loan.</div>
+    </div>
+    <div class="foot">
+      <div class="url">lodestarprotocol.xyz</div>
+      <div class="tags"><span class="tag g">0 liquidations by design</span><span class="tag">FTSOv2 priced</span></div>
+    </div>
+  </div>
+</body>
+</html>
