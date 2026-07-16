@@ -39,6 +39,7 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         uint64 openedAt;
         uint64 dueAt;
         bool active;
+        uint128 openRate; // collateral share->underlying rate at open (1e18); packs with `active`, for yield-skim
     }
 
     // --- immutable wiring ---
@@ -59,6 +60,7 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     uint32 public maxLoanLife = 90 days;
     uint64 public oracleFallbackDelay = 7 days; // once this far past due, a defaulted loan can settle even if FTSO is down
     bool public paused; // when true, blocks NEW borrows only; repay/rollover/settle stay open (non-custodial)
+    uint16 public yieldSkimBps; // 0 = borrower keeps all collateral appreciation (default); >0 routes that share to reserve on repay
 
     mapping(address => Tier[]) public tiers; // per-collateral tiers
     mapping(address => uint256) public exposureUsd18; // outstanding principal per collateral (usd18)
@@ -79,6 +81,7 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     event LoanRolled(uint256 indexed id, uint64 newDueAt, uint256 addFee);
     event LoanSettled(uint256 indexed id, address indexed keeper, uint256 proceeds, uint256 surplus, bool shortfall);
     event TierAdded(address indexed collateral, uint16 ltvBps, uint32 duration, uint16 feeBps);
+    event YieldSkimmed(uint256 indexed id, address indexed collateral, uint256 amount);
 
     error NotSupported();
     error BadTier();
@@ -145,6 +148,13 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         oracleFallbackDelay = d;
     }
 
+    /// @notice Share (bps, capped at 50%) of collateral staking-appreciation routed to the reserve on repay.
+    /// @dev Only bites on yield-bearing collateral (sFLR/stXRP) that appreciated during the loan.
+    function setYieldSkimBps(uint16 bps) external onlyOwner {
+        if (bps > 5000) revert BadParam();
+        yieldSkimBps = bps;
+    }
+
     // ------------------------------------------------------------------ views
     function tierCount(address collateral) external view returns (uint256) {
         return tiers[collateral].length;
@@ -168,16 +178,18 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         Tier memory t = ts[tierIndex];
 
         // Measure actually-received collateral (fee-on-transfer / non-standard token safe).
-        uint256 balBefore = IERC20(collateral).balanceOf(address(this));
-        IERC20(collateral).safeTransferFrom(msg.sender, address(this), collAmount);
-        collAmount = IERC20(collateral).balanceOf(address(this)) - balBefore;
+        {
+            uint256 balBefore = IERC20(collateral).balanceOf(address(this));
+            IERC20(collateral).safeTransferFrom(msg.sender, address(this), collAmount);
+            collAmount = IERC20(collateral).balanceOf(address(this)) - balBefore;
+        }
         if (collAmount == 0) revert BadParam();
 
-        uint256 valueUsd18 = oracle.usdValue18(collateral, collAmount);
-        uint256 principalUsd18 = (valueUsd18 * t.ltvBps) / 10_000;
-
-        uint256 cap = exposureCapUsd18[collateral];
-        if (cap != 0 && exposureUsd18[collateral] + principalUsd18 > cap) revert CapExceeded();
+        uint256 principalUsd18 = (oracle.usdValue18(collateral, collAmount) * t.ltvBps) / 10_000;
+        {
+            uint256 cap = exposureCapUsd18[collateral];
+            if (cap != 0 && exposureUsd18[collateral] + principalUsd18 > cap) revert CapExceeded();
+        }
         exposureUsd18[collateral] += principalUsd18;
 
         uint256 principal = _usd18ToStable(principalUsd18);
@@ -195,7 +207,8 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
             principalUsd18: principalUsd18.toUint128(),
             openedAt: uint64(block.timestamp),
             dueAt: dueAt,
-            active: true
+            active: true,
+            openRate: oracle.rateOf(collateral).toUint128()
         });
 
         pool.disburse(msg.sender, principal);
@@ -219,8 +232,28 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         uint256 rcut = (fee * feeReserveBps) / 10_000;
         if (rcut > 0) pool.payout(reserve, rcut);
 
-        IERC20(L.collateral).safeTransfer(L.borrower, L.collAmount);
+        _returnCollateral(L, id);
         emit LoanRepaid(id, msg.sender);
+    }
+
+    /// @dev Returns collateral to the borrower, routing a `yieldSkimBps` share of any staking
+    ///      appreciation (measured via the collateral's open vs. current rate) to the reserve.
+    function _returnCollateral(Loan storage L, uint256 id) internal {
+        uint256 ret = L.collAmount;
+        uint16 skimBps = yieldSkimBps;
+        if (skimBps != 0 && L.openRate != 0) {
+            uint256 nowRate = oracle.rateOf(L.collateral);
+            if (nowRate > L.openRate) {
+                uint256 gain = (L.collAmount * (nowRate - L.openRate)) / nowRate;
+                uint256 skim = (gain * skimBps) / 10_000;
+                if (skim != 0) {
+                    ret -= skim;
+                    IERC20(L.collateral).safeTransfer(reserve, skim);
+                    emit YieldSkimmed(id, L.collateral, skim);
+                }
+            }
+        }
+        IERC20(L.collateral).safeTransfer(L.borrower, ret);
     }
 
     /// @notice Extend a loan before its deadline by paying another tier fee (up to maxLoanLife).

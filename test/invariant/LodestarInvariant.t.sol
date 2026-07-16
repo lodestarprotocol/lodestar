@@ -59,7 +59,7 @@ contract Handler is Test {
     function repayLoan(uint256 idSeed, uint256 payerSeed) public {
         if (ids.length == 0) return;
         uint256 id = ids[idSeed % ids.length];
-        (,,, uint256 principal, uint256 fee,,,, bool active) = book.loans(id);
+        (,,, uint256 principal, uint256 fee,,,, bool active,) = book.loans(id);
         if (!active) return;
         address a = _actor(payerSeed);
         stable.mint(a, principal + fee);
@@ -72,7 +72,7 @@ contract Handler is Test {
     function settleLoan(uint256 idSeed) public {
         if (ids.length == 0) return;
         uint256 id = ids[idSeed % ids.length];
-        (,,,,,,, uint64 dueAt, bool active) = book.loans(id);
+        (,,,,,,, uint64 dueAt, bool active,) = book.loans(id);
         if (!active) return;
         vm.warp(uint256(dueAt) + 48 hours + 1);
         router.setRate(25, 10); // generous fill so lenders are made whole
@@ -148,7 +148,7 @@ contract LodestarInvariant is StdInvariant, Test {
         uint256 sum;
         uint256 n = h.idsLength();
         for (uint256 i; i < n; i++) {
-            (,,, uint256 principal,,,,, bool active) = book.loans(h.ids(i));
+            (,,, uint256 principal,,,,, bool active,) = book.loans(h.ids(i));
             if (active) sum += principal;
         }
         assertEq(sum, pool.principalOut(), "principalOut drift");
@@ -159,7 +159,7 @@ contract LodestarInvariant is StdInvariant, Test {
         uint256 sum;
         uint256 n = h.idsLength();
         for (uint256 i; i < n; i++) {
-            (,, uint256 collAmount,,,,,, bool active) = book.loans(h.ids(i));
+            (,, uint256 collAmount,,,,,, bool active,) = book.loans(h.ids(i));
             if (active) sum += collAmount;
         }
         assertEq(fxrp.balanceOf(address(book)), sum, "collateral custody drift");
@@ -170,7 +170,7 @@ contract LodestarInvariant is StdInvariant, Test {
         uint256 sum;
         uint256 n = h.idsLength();
         for (uint256 i; i < n; i++) {
-            (,,,,, uint256 pUsd,,, bool active) = book.loans(h.ids(i));
+            (,,,,, uint256 pUsd,,, bool active,) = book.loans(h.ids(i));
             if (active) sum += pUsd;
         }
         assertEq(book.exposureUsd18(address(fxrp)), sum, "exposure drift");
@@ -180,7 +180,7 @@ contract LodestarInvariant is StdInvariant, Test {
     function invariant_noZeroPrincipal() public view {
         uint256 n = h.idsLength();
         for (uint256 i; i < n; i++) {
-            (,,, uint256 principal,,,,, bool active) = book.loans(h.ids(i));
+            (,,, uint256 principal,,,,, bool active,) = book.loans(h.ids(i));
             if (active) assertGt(principal, 0, "zero-principal active loan");
         }
     }

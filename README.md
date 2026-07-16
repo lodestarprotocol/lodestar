@@ -32,9 +32,9 @@ made whole first, and any surplus (including collateral yield) returns to you.
 - **App:** https://lodestarprotocol.xyz
 - **Network:** Coston2 testnet (chainId 114), priced by the live Coston2 FTSOv2
 - **Contracts:**
-  - `LodestarLoanBook` — [`0x462dB8e9925b1AE2C6Bd35795dC1eFb92c995d62`](https://coston2-explorer.flare.network/address/0x462dB8e9925b1AE2C6Bd35795dC1eFb92c995d62)
-  - `LodestarPool` — `0x6a4fBfa36bEa8424e227357C5c9A6df843d9cd95`
-  - `LodestarOracle` — `0x7b8C70e81Abd4e248A971262B5BEe5752Df63374`
+  - `LodestarLoanBook` — [`0x28238E7f47802c991fC950b01262Dc2ba0c9045f`](https://coston2-explorer.flare.network/address/0x28238E7f47802c991fC950b01262Dc2ba0c9045f)
+  - `LodestarPool` — `0x1D761E61ade0d9F97fE7652c3a02930b06764526`
+  - `LodestarOracle` — `0xB36fcC44EFA9B3c468B6bD5B9874C17D09f2E432`
   - collateral: FTestXRP `0x0b6A…3dc7` · stable: USD₮0 `0xC1A5…E71F`
 
 ## Status

@@ -60,7 +60,8 @@ New improvements shipped (for the next redeploy; live Coston2 runs v1.0):
 ### Still open (accepted / deferred)
 - Keeper bounty (5%, in-kind) is taken before lenders on underwater loans — accepted design; could cap by USD later.
 - `rollover`/`repay` are callable by anyone on behalf of a borrower — harmless (they only *help* the borrower).
-- Optional **lender-side yield skim** (route part of sFLR appreciation to lenders) — designed, not yet implemented; currently all appreciation returns to the borrower.
+- **Lender-side yield skim** — implemented in v1.2 (`yieldSkimBps`, default **0** so borrowers keep all appreciation). When enabled (capped 50%), a share of collateral staking-appreciation (measured via the collateral's open-vs-current rate) routes to the reserve on repay. Kept out of the settlement path to avoid coupling it to DEX liquidity.
+- **v1.2 gas:** `Loan` packed to 6 slots (uint128 fields, SafeCast-guarded) → open() ~21k cheaper. `openRate` packs with `active` at no extra slot. Covered by the invariant suite (512k ops) and a `test_YieldSkimRoutesAppreciationToReserve` unit test.
 
 ## Not yet done (blockers before mainnet)
 

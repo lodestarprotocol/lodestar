@@ -129,7 +129,7 @@ contract LodestarSecurityTest is Test {
         assertEq(pool.principalOut(), 0, "principal not cleared after settlement");
         assertLt(pool.totalAssets(), assetsBefore, "loss not realized (phantom solvency)");
         // and the loan is closed, so it can't be re-settled or double-counted
-        (,,,,,,,, bool active) = book.loans(id);
+        (,,,,,,,, bool active,) = book.loans(id);
         assertFalse(active);
     }
 
@@ -145,7 +145,7 @@ contract LodestarSecurityTest is Test {
         book.open(address(fxrp), 1_000e6, 0);
         vm.stopPrank();
         // existing loan can still be repaid while paused (non-custodial)
-        (,,, uint256 principal, uint256 fee,,,,) = book.loans(id);
+        (,,, uint256 principal, uint256 fee,,,,,) = book.loans(id);
         usdt0.mint(borrower, principal + fee);
         vm.startPrank(borrower);
         usdt0.approve(address(pool), principal + fee);
@@ -168,14 +168,14 @@ contract LodestarSecurityTest is Test {
         vm.warp(block.timestamp + 7 days);
         vm.prank(keeper);
         book.settle(id, 100e6);
-        (,,,,,,,, bool active) = book.loans(id);
+        (,,,,,,,, bool active,) = book.loans(id);
         assertFalse(active, "defaulted loan not resolved after oracle-fallback delay");
     }
 
     /// Borrow amount can never exceed the tier LTV of the FTSO-valued collateral.
     function test_CannotBorrowAboveLTV() public {
         uint256 id = _borrow(borrower, 1_000e6); // 1000 FXRP @ $2.50 = $2500, 50% LTV
-        (,,, uint256 principal,,,,,) = book.loans(id);
+        (,,, uint256 principal,,,,,,) = book.loans(id);
         // principal (6dp USDT0) must be <= 50% of $2500 = $1250
         assertLe(principal, 1_250e6, "borrowed above LTV");
         assertApproxEqAbs(principal, 1_250e6, 1, "LTV math off");

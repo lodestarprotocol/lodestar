@@ -342,8 +342,8 @@ td:first-child{text-align:left}
 
       <div class="foot">
         <b style="color:var(--ink2)">Lodestar</b>, no-liquidation fixed-term lending, live on <b style="color:var(--ink2)">Coston2 testnet</b>.
-        LoanBook <span class="mono">0x462d…5d62</span> · Pool <span class="mono">0x6a4f…cd95</span> · Oracle <span class="mono">0x7b8C…3374</span> ·
-        <a href="https://coston2-explorer.flare.network/address/0x462dB8e9925b1AE2C6Bd35795dC1eFb92c995d62" target="_blank" rel="noopener" style="color:var(--red);font-weight:600">explorer ↗</a>
+        LoanBook <span class="mono">0x2823…045f</span> · Pool <span class="mono">0x1D76…4526</span> · Oracle <span class="mono">0xB36f…E432</span> ·
+        <a href="https://coston2-explorer.flare.network/address/0x28238E7f47802c991fC950b01262Dc2ba0c9045f" target="_blank" rel="noopener" style="color:var(--red);font-weight:600">explorer ↗</a>
       </div>
     </div>
   </div>
@@ -354,16 +354,16 @@ td:first-child{text-align:left}
 const RPC="https://coston2-api.flare.network/ext/C/rpc";
 const CHAIN_HEX="0x72", CHAIN_NAME="Flare Testnet Coston2";
 const FTSO="0xC4e9c78EA53db782E28f28Fdf80BaF59336B304d";
-const ORACLE="0x7b8C70e81Abd4e248A971262B5BEe5752Df63374";
-const POOL="0x6a4fBfa36bEa8424e227357C5c9A6df843d9cd95";
-const BOOK="0x462dB8e9925b1AE2C6Bd35795dC1eFb92c995d62";
+const ORACLE="0xB36fcC44EFA9B3c468B6bD5B9874C17D09f2E432";
+const POOL="0x1D761E61ade0d9F97fE7652c3a02930b06764526";
+const BOOK="0x28238E7f47802c991fC950b01262Dc2ba0c9045f";
 const FXRP_ADDR="0x0b6A3645c240605887a5532109323A3E12273dc7"; // FTestXRP 6dp
 const USDT0_ADDR="0xC1A5B41512496B80903D1f32d6dEa3a73212E71F"; // USD₮0 6dp
 const FEED_XRP="0x015852502f55534400000000000000000000000000", FEED_FLR="0x01464c522f55534400000000000000000000000000";
 const FTSO_ABI=["function getFeedById(bytes21) view returns (uint256 value, int8 decimals, uint64 timestamp)"];
 const POOL_ABI=["function totalAssets() view returns (uint256)","function principalOut() view returns (uint256)"];
 const ERC20_ABI=["function approve(address,uint256) returns (bool)","function allowance(address,address) view returns (uint256)","function balanceOf(address) view returns (uint256)"];
-const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint256 principal,uint256 fee,uint256 principalUsd18,uint64 openedAt,uint64 dueAt,bool active)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)"];
+const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)"];
 const POOLW_ABI=["function deposit(uint256,address) returns (uint256)","function redeem(uint256,address,address) returns (uint256)","function balanceOf(address) view returns (uint256)","function convertToAssets(uint256) view returns (uint256)"];
 const MK={
   FXRP:{img:"assets/fxrp.png",name:"FXRP",sub:"XRP · FAsset",price:0,live:true,tiers:[{n:"Standard",d:7,ltv:50,fee:2.0},{n:"Extended",d:30,ltv:45,fee:3.5}]},

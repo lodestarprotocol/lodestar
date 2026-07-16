@@ -231,6 +231,32 @@ contract LodestarTest is Test {
         assertEq(sflr.balanceOf(borrower), 100_000e18, "full yield-bearing collateral returned");
     }
 
+    function test_YieldSkimRoutesAppreciationToReserve() public {
+        book.setYieldSkimBps(5000); // route 50% of collateral appreciation to the reserve
+        sflr.mint(borrower, 100_000e18);
+        vm.startPrank(borrower);
+        sflr.approve(address(book), type(uint256).max);
+        uint256 id = book.open(address(sflr), 100_000e18, 0);
+        vm.stopPrank();
+
+        sflrRate.set(1.1e18); // sFLR appreciates 10% during the loan
+
+        usdt0.mint(borrower, 36e6); // cover the 3% fee
+        vm.startPrank(borrower);
+        usdt0.approve(address(pool), type(uint256).max);
+        book.repay(id);
+        vm.stopPrank();
+
+        uint256 coll = 100_000e18;
+        uint256 openR = 1e18;
+        uint256 nowR = 1.1e18;
+        uint256 gain = (coll * (nowR - openR)) / nowR; // tokens equal to the appreciation
+        uint256 expectedSkim = (gain * 5000) / 10_000; // 50% of it
+        assertEq(sflr.balanceOf(reserve), expectedSkim, "wrong skim to reserve");
+        assertEq(sflr.balanceOf(borrower) + expectedSkim, 100_000e18, "collateral tokens not conserved");
+        assertGt(expectedSkim, 0, "nothing skimmed");
+    }
+
     function test_RejectsDustLoan() public {
         // a tiny sFLR amount values to < 1 stable unit of principal -> must revert, not create dust
         sflr.mint(borrower, 1e9);

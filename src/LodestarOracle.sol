@@ -62,6 +62,13 @@ contract LodestarOracle is Ownable {
         return (p * amount) / (10 ** f.tokenDecimals);
     }
 
+    /// @notice Current share->underlying rate of `token` (1e18-scaled); 1e18 if it has no LST rate.
+    /// @dev Used by the loan book to measure staking appreciation between open and repay.
+    function rateOf(address token) external view returns (uint256) {
+        address rp = feeds[token].rateProvider;
+        return rp == address(0) ? 1e18 : ILstRateProvider(rp).underlyingPerShare();
+    }
+
     function _to18(uint256 value, int8 dec) internal pure returns (uint256) {
         int256 diff = int256(18) - int256(dec);
         if (diff >= 0) return value * (10 ** uint256(diff));
