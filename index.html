@@ -447,7 +447,8 @@ function route(){let h=(location.hash||"#dashboard").replace("#","");if(!VIEWS.i
   document.querySelectorAll(".view").forEach(v=>v.classList.toggle("active",v.id==="view-"+h));
   document.querySelectorAll(".nav-item").forEach(n=>n.classList.toggle("on",n.dataset.view===h));
   $("crumb").innerHTML="<b>Lodestar</b> / "+TITLES[h][0];$("tt").textContent=TITLES[h][1];window.scrollTo(0,0);
-  document.querySelector(".sidebar").classList.remove("open");$("scrim").classList.remove("show");}
+  const sb=document.querySelector(".sidebar"); if(sb)sb.classList.remove("open");
+  const sc=$("scrim"); if(sc)sc.classList.remove("show");}
 window.addEventListener("hashchange",route);
 
 function icHTML(k){return `<span class="ic"><img src="${MK[k].img}" alt="${k}"/></span>`;}
@@ -632,9 +633,14 @@ async function loadPositions(){
 function refreshAll(){ loadChain(); loadPositions(); fetchBalances(); }
 window.closeOnb=()=>{ $("onb").style.display="none"; try{localStorage.setItem("lode_onboarded","1");}catch(e){} };
 function maybeOnboard(){ try{ if(!localStorage.getItem("lode_onboarded")) $("onb").style.display="flex"; }catch(e){} }
-rows();terms();setColl("FXRP");route();loadChain();setInterval(()=>{loadChain();if(account)fetchBalances();},15000);
-setTimeout(tryEager,600); // reconnect the last-used wallet after EIP-6963 providers announce
-maybeOnboard();
+function init(){
+  rows();terms();setColl("FXRP");route();loadChain();
+  setInterval(()=>{loadChain();if(account)fetchBalances();},15000);
+  setTimeout(tryEager,600); // reconnect the last-used wallet after EIP-6963 providers announce
+  maybeOnboard();
+}
+// run after the whole body (incl. the trailing modals: #scrim, #onb, #wmodal) is parsed
+if(document.readyState==="loading") document.addEventListener("DOMContentLoaded",init); else init();
 </script>
 
 <div class="scrim" id="scrim" onclick="toggleMenu()"></div>
