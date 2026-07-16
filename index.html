@@ -3,8 +3,21 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Lodestar, no-liquidation lending on Flare</title>
+<title>Lodestar · no-liquidation lending on Flare</title>
+<meta name="description" content="Borrow USD₮0 against FXRP and sFLR on Flare. No margin calls, no health factor. Only the deadline can close your loan." />
 <link rel="icon" type="image/png" href="assets/favicon.png" />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://lodestarprotocol.xyz" />
+<meta property="og:title" content="Lodestar · no-liquidation lending on Flare" />
+<meta property="og:description" content="Borrow against XRP and FLR. No liquidations, only a deadline. Live on Flare." />
+<meta property="og:image" content="https://lodestarprotocol.xyz/assets/og.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:site" content="@lodestar_flr" />
+<meta name="twitter:title" content="Lodestar · no-liquidation lending on Flare" />
+<meta name="twitter:description" content="Borrow against XRP and FLR. No liquidations, only a deadline." />
+<meta name="twitter:image" content="https://lodestarprotocol.xyz/assets/og.png" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
@@ -194,6 +207,21 @@ td:first-child{text-align:left}
 .toast .tclose{margin-left:auto;opacity:.7;cursor:pointer;font-size:14px;line-height:1}
 .toast a{color:#fff;text-decoration:underline}
 @keyframes tin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+/* onboarding */
+.onb{position:fixed;inset:0;background:rgba(10,10,11,.5);backdrop-filter:blur(4px);z-index:250;display:flex;align-items:center;justify-content:center;padding:16px;animation:tin .2s ease}
+.onb-card{background:var(--card);border:1px solid var(--line);border-radius:16px;width:452px;max-width:96vw;padding:26px;box-shadow:0 30px 80px rgba(0,0,0,.3);max-height:92vh;overflow:auto}
+.onb-top{display:flex;align-items:center;gap:11px}
+.onb-top img{height:26px}
+.onb-top b{font-size:18.5px;font-weight:750;letter-spacing:-.02em}
+.onb-lead{color:var(--muted);font-size:13px;margin-top:9px;line-height:1.5}
+.onb-steps{margin:19px 0 4px;display:flex;flex-direction:column;gap:15px}
+.onb-step{display:flex;gap:13px;align-items:flex-start}
+.onb-step .n{width:26px;height:26px;flex:none;border-radius:8px;background:var(--red-wash);color:var(--red);font-weight:800;font-size:13px;display:grid;place-items:center;border:1px solid #F5D9DF}
+.onb-step b{font-size:14px;font-weight:650}
+.onb-step p{color:var(--muted);font-size:12.5px;margin-top:2px;line-height:1.5}
+.onb-badge{display:flex;align-items:center;gap:8px;background:var(--pos-wash);color:var(--pos);font-weight:600;font-size:12.5px;padding:11px 13px;border-radius:10px;margin:16px 0}
+.onb-badge svg{width:15px;height:15px;flex:none;stroke:var(--pos);stroke-width:2.2;fill:none}
+.btn-block{width:100%;justify-content:center}
 /* mobile */
 .menu-btn{display:none;width:34px;height:34px;place-items:center;border:1px solid var(--line-str);border-radius:8px;background:var(--card)}
 .menu-btn svg{width:18px;height:18px;stroke:var(--ink);stroke-width:2;fill:none}
@@ -290,7 +318,7 @@ td:first-child{text-align:left}
             <div class="ph"><h3>Borrow USD₮0</h3><span class="tag">no health factor</span></div>
             <div class="pb">
               <div class="seg" id="collSeg"><button class="on" data-c="FXRP"><img src="assets/fxrp.png" class="segic">FXRP</button><button data-c="STXRP"><img src="assets/stxrp.png" class="segic">stXRP</button><button data-c="SFLR"><img src="assets/sflr.png" class="segic">sFLR</button></div>
-              <div class="fld"><label>Collateral to lock <span class="bal">Bal <b id="balFXRP">—</b><button class="maxbtn" onclick="fillAmt('amt','FXRP',1)">MAX</button><button class="maxbtn" onclick="fillAmt('amt','FXRP',0.5)">50%</button></span></label><div class="inp"><input id="amt" type="number" value="1000" min="0"/><span class="u" id="collTag">FXRP</span></div></div>
+              <div class="fld"><label>Collateral to lock <span class="bal">Balance <b id="balFXRP">—</b><button class="maxbtn" onclick="fillAmt('amt','FXRP',1)">MAX</button><button class="maxbtn" onclick="fillAmt('amt','FXRP',0.5)">50%</button></span></label><div class="inp"><input id="amt" type="number" value="1000" min="0"/><span class="u" id="collTag">FXRP</span></div></div>
               <div class="fld"><label>Term</label><div class="terms" id="terms"></div></div>
               <div class="preview">
                 <div class="prow hero"><span class="l">You receive</span><span class="r" id="q-recv">…</span></div>
@@ -324,7 +352,7 @@ td:first-child{text-align:left}
           <div class="panel">
             <div class="ph"><h3>Supply USD₮0</h3><span class="tag">ERC-4626 · lodUSD₮0</span></div>
             <div class="pb">
-              <div class="fld"><label>Deposit amount <span class="bal">Bal <b id="balUSDT0">—</b><button class="maxbtn" onclick="fillAmt('lamt','USDT0',1)">MAX</button><button class="maxbtn" onclick="fillAmt('lamt','USDT0',0.5)">50%</button></span></label><div class="inp"><input id="lamt" type="number" value="10000" min="0"/><span class="u">USD₮0</span></div></div>
+              <div class="fld"><label>Deposit amount <span class="bal">Balance <b id="balUSDT0">—</b><button class="maxbtn" onclick="fillAmt('lamt','USDT0',1)">MAX</button><button class="maxbtn" onclick="fillAmt('lamt','USDT0',0.5)">50%</button></span></label><div class="inp"><input id="lamt" type="number" value="10000" min="0"/><span class="u">USD₮0</span></div></div>
               <div class="preview" style="border-top:none;padding-top:4px">
                 <div class="prow hero"><span class="l">Estimated net APY</span><span class="r" style="color:var(--red)">14–18%</span></div>
                 <div class="prow"><span class="l">Borrower fees</span><span class="r">4–9%</span></div>
@@ -333,7 +361,7 @@ td:first-child{text-align:left}
                 <div class="badge"><b>Seniority</b>, lenders are repaid first on any default.</div>
               </div>
               <button class="btn btn-red btn-block" id="lendBtn" style="margin-top:16px" onclick="doDeposit()">Connect wallet</button>
-              <p class="note">Shares accrue value as borrowers pay fees and locked sFLR earns staking. No lockups, no claiming, withdraw anytime.</p>
+              <p class="note"><b>lodUSD₮0</b> is your deposit receipt: about 1 per USD₮0 today, and it grows in value as borrowers pay fees. Redeem it anytime for your USD₮0 plus earnings. No lockups.</p>
             </div>
           </div>
           <div>
@@ -477,25 +505,50 @@ window.openWalletPicker=()=>{
   $("wpList").innerHTML=list.map((w,i)=>`<button class="wopt" onclick="pickWallet(${i})">${w.info.icon?`<img src="${w.info.icon}" alt="">`:'<span style="width:24px"></span>'}<span>${w.info.name}</span></button>`).join("");
   $("wmodal").style.display="flex";
 };
-window.pickWallet=async i=>{ closeWallet(); await connectWith(window._WL[i].provider); };
-async function connectWith(eip){
-  try{
-    await eip.request({method:"eth_requestAccounts"});
-    try{ await eip.request({method:"wallet_switchEthereumChain",params:[{chainId:CHAIN_HEX}]}); }
-    catch(e){ if(e.code===4902||(""+e).toLowerCase().includes("unrecognized")) await eip.request({method:"wallet_addEthereumChain",params:[{chainId:CHAIN_HEX,chainName:CHAIN_NAME,nativeCurrency:{name:"Coston2 Flare",symbol:"C2FLR",decimals:18},rpcUrls:[RPC],blockExplorerUrls:["https://coston2-explorer.flare.network"]}]}); }
-    bp=new ethers.BrowserProvider(eip); signer=await bp.getSigner(); account=await signer.getAddress();
-    if(eip.on){ eip.on("accountsChanged",()=>location.reload()); eip.on("chainChanged",()=>location.reload()); }
-    onConnected();
-  }catch(e){ console.error(e); toast("Connection failed: "+(e.shortMessage||e.message||e),"err"); }
+window.pickWallet=async i=>{ closeWallet(); const w=window._WL[i]; if(w.info&&w.info.rdns) localStorage.setItem("lode_wallet",w.info.rdns); await connectWith(w.provider,false); };
+let currentEip=null;
+function disconnectWallet(){
+  account=null; signer=null; bp=null; localStorage.removeItem("lode_wallet");
+  $("connect").textContent="Connect Wallet";
+  const t=document.querySelector(".acct .t"); if(t) t.innerHTML='Not connected<small>Coston2 · chainId 114</small>';
+  const av=document.querySelector(".acct .av"); if(av) av.textContent="L";
+  $("borrowBtn").textContent="Connect wallet"; $("lendBtn").textContent="Connect wallet";
+  setTx("balFXRP","—"); setTx("balUSDT0","—");
 }
-function onConnected(){
+async function connectWith(eip, eager){
+  try{
+    const accts = await eip.request({method: eager?"eth_accounts":"eth_requestAccounts"});
+    if(!accts || !accts.length){ if(!eager) toast("No account available in this wallet.","err"); return; }
+    if(!eager){
+      try{ await eip.request({method:"wallet_switchEthereumChain",params:[{chainId:CHAIN_HEX}]}); }
+      catch(e){ if(e.code===4902||(""+e).toLowerCase().includes("unrecognized")){ try{ await eip.request({method:"wallet_addEthereumChain",params:[{chainId:CHAIN_HEX,chainName:CHAIN_NAME,nativeCurrency:{name:"Coston2 Flare",symbol:"C2FLR",decimals:18},rpcUrls:[RPC],blockExplorerUrls:["https://coston2-explorer.flare.network"]}]}); }catch(_){}} }
+    }
+    currentEip=eip;
+    bp=new ethers.BrowserProvider(eip); signer=await bp.getSigner(); account=await signer.getAddress();
+    // hook events ONCE per provider, and never reload the page (that's what dropped the session)
+    if(!eip._lodeHooked && eip.on){
+      eip._lodeHooked=true;
+      eip.on("accountsChanged",async(a)=>{ if(!a||!a.length){ disconnectWallet(); toast("Wallet disconnected."); } else { account=a[0]; bp=new ethers.BrowserProvider(eip); try{signer=await bp.getSigner();}catch(_){} onConnected(true); } });
+      eip.on("chainChanged",async()=>{ bp=new ethers.BrowserProvider(eip); try{signer=await bp.getSigner();}catch(_){} refreshAll(); });
+    }
+    onConnected(eager);
+  }catch(e){ console.error(e); if(!eager) toast("Connection failed: "+(e.shortMessage||e.message||e),"err"); }
+}
+function onConnected(eager){
   const s=account.slice(0,6)+"…"+account.slice(-4);
   $("connect").textContent=s;
   const t=document.querySelector(".acct .t"); if(t) t.innerHTML=`Connected<small class="mono">${s}</small>`;
   const av=document.querySelector(".acct .av"); if(av) av.textContent=account.slice(2,3).toUpperCase();
   $("borrowBtn").textContent="Borrow"; $("lendBtn").textContent="Supply USD₮0";
   loadPositions(); fetchBalances();
-  toast("Wallet connected.","ok");
+  if(!eager) toast("Wallet connected.","ok");
+}
+// silently reconnect the previously-used wallet on load (survives refresh; no more "kicked out")
+function tryEager(){
+  const saved=localStorage.getItem("lode_wallet"); if(!saved) return;
+  const w=WALLETS.find(x=>x.info&&x.info.rdns===saved);
+  if(w) connectWith(w.provider,true);
+  else if(window.ethereum) connectWith(window.ethereum,true);
 }
 async function fetchBalances(){
   if(!account) return;
@@ -577,7 +630,11 @@ async function loadPositions(){
   }catch(e){ console.error("positions",e); }
 }
 function refreshAll(){ loadChain(); loadPositions(); fetchBalances(); }
+window.closeOnb=()=>{ $("onb").style.display="none"; try{localStorage.setItem("lode_onboarded","1");}catch(e){} };
+function maybeOnboard(){ try{ if(!localStorage.getItem("lode_onboarded")) $("onb").style.display="flex"; }catch(e){} }
 rows();terms();setColl("FXRP");route();loadChain();setInterval(()=>{loadChain();if(account)fetchBalances();},15000);
+setTimeout(tryEager,600); // reconnect the last-used wallet after EIP-6963 providers announce
+maybeOnboard();
 </script>
 
 <div class="scrim" id="scrim" onclick="toggleMenu()"></div>
@@ -588,6 +645,19 @@ rows();terms();setColl("FXRP");route();loadChain();setInterval(()=>{loadChain();
     <div class="wsub">Pick an installed wallet to connect on Coston2 testnet.</div>
     <div id="wpList" class="wlist"></div>
     <div class="wfoot">Chain ID 114 · you'll be prompted to switch networks</div>
+  </div>
+</div>
+<div id="onb" class="onb" style="display:none" onclick="if(event.target===this)closeOnb()">
+  <div class="onb-card">
+    <div class="onb-top"><img src="assets/logo-mark.png" alt=""/><b>Welcome to Lodestar</b></div>
+    <p class="onb-lead">No-liquidation, fixed-term lending on Flare. Here is the whole protocol in three steps.</p>
+    <div class="onb-steps">
+      <div class="onb-step"><span class="n">1</span><div><b>Lock collateral</b><p>Deposit FXRP, sFLR or stXRP. It keeps earning its staking yield the entire time it is locked.</p></div></div>
+      <div class="onb-step"><span class="n">2</span><div><b>Borrow USD₮0</b><p>Take up to your tier's LTV and pay one small fixed fee. No interest, no health factor to babysit.</p></div></div>
+      <div class="onb-step"><span class="n">3</span><div><b>Repay by your deadline</b><p>Get your collateral back plus any yield it earned. Missing the deadline is the only thing that can close your loan.</p></div></div>
+    </div>
+    <div class="onb-badge"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>A price crash can never liquidate you. Only the calendar can.</div>
+    <button class="btn btn-red btn-block" onclick="closeOnb()">Start exploring</button>
   </div>
 </div>
 </body>
