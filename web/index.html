@@ -324,9 +324,11 @@ td:first-child{text-align:left}
 <script>
 const RPC="https://flare-api.flare.network/ext/C/rpc";
 const FTSO="0x7BDE3Df0624114eDB3A67dFe6753e62f4e7c1d20", SFLR="0x12e605bc104e93B45e1aD99F9e555f659051c2BB";
+const STXRP="0x4C18Ff3C89632c3Dd62E796c0aFA5c07c4c1B2b3"; // Firelight, ERC4626 over FXRP
 const FEED_XRP="0x015852502f55534400000000000000000000000000", FEED_FLR="0x01464c522f55534400000000000000000000000000";
 const FTSO_ABI=["function getFeedById(bytes21) view returns (uint256 value, int8 decimals, uint64 timestamp)"];
 const SFLR_ABI=["function getPooledFlrByShares(uint256) view returns (uint256)"];
+const ERC4626_ABI=["function convertToAssets(uint256) view returns (uint256)"];
 const MK={
   FXRP:{img:"assets/fxrp.png",name:"FXRP",sub:"XRP · FAsset",price:0,tiers:[{n:"Standard",d:7,ltv:50,fee:2.0},{n:"Extended",d:30,ltv:45,fee:3.5}]},
   STXRP:{img:"assets/stxrp.png",name:"stXRP",sub:"Firelight staked XRP",price:0,tiers:[{n:"Standard",d:7,ltv:50,fee:2.0},{n:"Extended",d:30,ltv:45,fee:3.5}]},
@@ -373,10 +375,10 @@ $("amt").addEventListener('input',preview);$("lamt").addEventListener('input',pr
 
 async function loadChain(){
   try{const p=new ethers.JsonRpcProvider(RPC);$("netblock").textContent="#"+await p.getBlockNumber();
-    const f=new ethers.Contract(FTSO,FTSO_ABI,p),s=new ethers.Contract(SFLR,SFLR_ABI,p);
-    const [xrp,flr,rate]=await Promise.all([f.getFeedById(FEED_XRP),f.getFeedById(FEED_FLR),s.getPooledFlrByShares(10n**18n)]);
+    const f=new ethers.Contract(FTSO,FTSO_ABI,p),s=new ethers.Contract(SFLR,SFLR_ABI,p),st=new ethers.Contract(STXRP,ERC4626_ABI,p);
+    const [xrp,flr,rate,strate]=await Promise.all([f.getFeedById(FEED_XRP),f.getFeedById(FEED_FLR),s.getPooledFlrByShares(10n**18n),st.convertToAssets(1000000n)]);
     const px=v=>Number(v.value)/10**Number(v.decimals);
-    MK.FXRP.price=px(xrp);MK.STXRP.price=px(xrp);MK.SFLR.price=px(flr)*(Number(rate)/1e18);
+    MK.FXRP.price=px(xrp);MK.STXRP.price=px(xrp)*(Number(strate)/1e6);MK.SFLR.price=px(flr)*(Number(rate)/1e18);
     for(const k of Object.keys(MK)){const el=$("px-"+k);if(el)el.textContent=usd(MK[k].price);}
     preview();
   }catch(e){$("netblock").textContent="offline";console.error(e);}
