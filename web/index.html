@@ -134,7 +134,11 @@ td:first-child{text-align:left}
 .seg button{flex:1;border:none;background:transparent;padding:8px 6px;border-radius:6px;font-weight:600;font-size:12.5px;color:var(--muted);display:flex;align-items:center;justify-content:center}
 .seg button.on{background:var(--card);color:var(--ink);box-shadow:0 1px 2px rgba(10,10,11,.06)}
 .fld{margin-top:15px}
-.fld label{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.02em;text-transform:uppercase;display:flex;justify-content:space-between;margin-bottom:7px}
+.fld label{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.02em;text-transform:uppercase;display:flex;justify-content:space-between;align-items:center;margin-bottom:7px}
+.bal{display:flex;align-items:center;gap:6px;text-transform:none;letter-spacing:0;font-weight:500}
+.bal b{color:var(--ink);font-family:var(--mono)}
+.maxbtn{border:1px solid var(--line-str);background:var(--card);border-radius:5px;padding:2px 7px;font-size:10px;font-weight:700;color:var(--red);cursor:pointer;letter-spacing:.02em}
+.maxbtn:hover{border-color:var(--red);background:var(--red-wash)}
 .inp{display:flex;align-items:center;border:1px solid var(--line-str);border-radius:9px;padding:11px 14px;gap:10px}
 .inp:focus-within{border-color:var(--ink);box-shadow:0 0 0 3px rgba(10,10,11,.05)}
 .inp input{border:none;outline:none;font-family:var(--mono);font-size:19px;font-weight:500;width:100%;background:transparent;color:var(--ink);font-variant-numeric:tabular-nums}
@@ -181,6 +185,35 @@ td:first-child{text-align:left}
 .posrow b{font-size:13.5px;font-weight:650}.posrow small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
 .posr{display:flex;align-items:center;gap:12px}
 .btn:disabled{opacity:.6;cursor:default}
+.wsub{padding:0 18px 4px;font-size:11.5px;color:var(--muted)}
+.wopt small{display:block;color:var(--muted);font-weight:500;font-size:11px;margin-top:1px}
+/* toasts */
+.toasts{position:fixed;right:16px;bottom:16px;z-index:300;display:flex;flex-direction:column;gap:8px;max-width:min(370px,92vw)}
+.toast{display:flex;gap:10px;align-items:flex-start;background:var(--ink);color:#fff;border-radius:11px;padding:12px 14px;font-size:13px;font-weight:500;line-height:1.4;box-shadow:0 12px 34px rgba(0,0,0,.28);animation:tin .18s ease}
+.toast.ok{background:#0B7A4E}.toast.err{background:#B0202E}
+.toast .tclose{margin-left:auto;opacity:.7;cursor:pointer;font-size:14px;line-height:1}
+.toast a{color:#fff;text-decoration:underline}
+@keyframes tin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+/* mobile */
+.menu-btn{display:none;width:34px;height:34px;place-items:center;border:1px solid var(--line-str);border-radius:8px;background:var(--card)}
+.menu-btn svg{width:18px;height:18px;stroke:var(--ink);stroke-width:2;fill:none}
+.scrim{display:none;position:fixed;inset:0;background:rgba(10,10,11,.4);z-index:140}
+.scrim.show{display:block}
+@media(max-width:820px){
+  .shell{grid-template-columns:1fr}
+  .sidebar{position:fixed;left:0;top:0;bottom:0;width:266px;z-index:150;transform:translateX(-100%);transition:transform .22s ease}
+  .sidebar.open{transform:none;box-shadow:0 0 50px rgba(0,0,0,.22)}
+  .menu-btn{display:grid}
+  .search,.net{display:none}
+  .content{padding:16px 14px 72px}
+  .stats.c4{grid-template-columns:repeat(2,1fr)}
+  .why{grid-template-columns:1fr}
+  .why > div{border-right:none;border-bottom:1px solid var(--line)}
+  .why > div:last-child{border-bottom:none}
+  .scrollx{overflow-x:auto}.scrollx table{min-width:580px}
+  .topbar{padding:0 14px;gap:10px}.tt{font-size:14px}
+  .toasts{left:12px;right:12px;bottom:12px;max-width:none}
+}
 </style>
 </head>
 <body>
@@ -205,6 +238,7 @@ td:first-child{text-align:left}
 
   <div class="main">
     <header class="topbar">
+      <button class="menu-btn" onclick="toggleMenu()" aria-label="Menu"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
       <div><div class="crumb" id="crumb"><b>Lodestar</b> / Dashboard</div><div class="tt" id="tt">Protocol overview</div></div>
       <div class="grow"></div>
       <div class="net net-test"><i></i> Coston2 Testnet</div>
@@ -239,7 +273,7 @@ td:first-child{text-align:left}
         </div>
 
         <div class="sec-h"><h2>Collateral markets</h2><span>priced live by Flare FTSOv2 · settlement is deadline-based, never price-based</span></div>
-        <div class="card"><table>
+        <div class="card scrollx"><table>
           <thead><tr><th>Collateral</th><th>Oracle price</th><th>Max LTV</th><th>Terms</th><th>Fee from</th><th>Status</th><th></th></tr></thead>
           <tbody id="mkt-rows"></tbody>
         </table></div>
@@ -256,7 +290,7 @@ td:first-child{text-align:left}
             <div class="ph"><h3>Borrow USD₮0</h3><span class="tag">no health factor</span></div>
             <div class="pb">
               <div class="seg" id="collSeg"><button class="on" data-c="FXRP"><img src="assets/fxrp.png" class="segic">FXRP</button><button data-c="STXRP"><img src="assets/stxrp.png" class="segic">stXRP</button><button data-c="SFLR"><img src="assets/sflr.png" class="segic">sFLR</button></div>
-              <div class="fld"><label>Collateral to lock</label><div class="inp"><input id="amt" type="number" value="1000" min="0"/><span class="u" id="collTag">FXRP</span></div></div>
+              <div class="fld"><label>Collateral to lock <span class="bal">Bal <b id="balFXRP">—</b><button class="maxbtn" onclick="fillAmt('amt','FXRP',1)">MAX</button><button class="maxbtn" onclick="fillAmt('amt','FXRP',0.5)">50%</button></span></label><div class="inp"><input id="amt" type="number" value="1000" min="0"/><span class="u" id="collTag">FXRP</span></div></div>
               <div class="fld"><label>Term</label><div class="terms" id="terms"></div></div>
               <div class="preview">
                 <div class="prow hero"><span class="l">You receive</span><span class="r" id="q-recv">…</span></div>
@@ -290,7 +324,7 @@ td:first-child{text-align:left}
           <div class="panel">
             <div class="ph"><h3>Supply USD₮0</h3><span class="tag">ERC-4626 · lodUSD₮0</span></div>
             <div class="pb">
-              <div class="fld"><label>Deposit amount</label><div class="inp"><input id="lamt" type="number" value="10000" min="0"/><span class="u">USD₮0</span></div></div>
+              <div class="fld"><label>Deposit amount <span class="bal">Bal <b id="balUSDT0">—</b><button class="maxbtn" onclick="fillAmt('lamt','USDT0',1)">MAX</button><button class="maxbtn" onclick="fillAmt('lamt','USDT0',0.5)">50%</button></span></label><div class="inp"><input id="lamt" type="number" value="10000" min="0"/><span class="u">USD₮0</span></div></div>
               <div class="preview" style="border-top:none;padding-top:4px">
                 <div class="prow hero"><span class="l">Estimated net APY</span><span class="r" style="color:var(--red)">14–18%</span></div>
                 <div class="prow"><span class="l">Borrower fees</span><span class="r">4–9%</span></div>
@@ -327,9 +361,9 @@ td:first-child{text-align:left}
       <section class="view" id="view-why">
         <div class="sec-h first"><h2>Why no-liquidation wins</h2><span>the model, in three ideas</span></div>
         <div class="card"><div class="why">
-          <div><b>Only the calendar defaults you</b><p>No health factor, no margin calls. XRP can wick 60% at 3am and recover by breakfast, your collateral is untouched. Miss your deadline and you still receive the surplus back.</p></div>
+          <div><b>Only the calendar defaults you</b><p>No health factor, no margin calls. XRP can wick 60% at 3am and recover by breakfast. Your collateral stays untouched. Miss your deadline and you still get the surplus back.</p></div>
           <div><b>FTSOv2 native oracle</b><p>Prices come from Flare's enshrined oracle, the same feed that secures the chain, not a flash-loanable DEX spot. Settlement is floored at 98% of the FTSO price so a keeper can't route value away.</p></div>
-          <div><b>Collateral keeps earning</b><p>Locked sFLR and stXRP keep earning their staking yield for the full term, that appreciation returns to you on repay. Dead-weight collateral is a thing of the past.</p></div>
+          <div><b>Collateral keeps earning</b><p>Locked sFLR and stXRP keep earning their staking yield for the full term. That appreciation comes back to you on repay. Dead-weight collateral is a thing of the past.</p></div>
         </div></div>
         <div class="card pad" style="margin-top:16px">
           <div class="lbl">How a loan works</div>
@@ -373,6 +407,10 @@ const MK={
 let COLL="FXRP", TIER=0;
 const $=id=>document.getElementById(id);
 const usd=n=>"$"+n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:n<10?4:2});
+const BAL={FXRP:0n,USDT0:0n};
+function toast(msg,type){const c=$("toasts");if(!c)return;const el=document.createElement("div");el.className="toast"+(type?" "+type:"");el.innerHTML=`<div>${msg}</div><span class="tclose" onclick="this.parentElement.remove()">✕</span>`;c.appendChild(el);setTimeout(()=>el.remove(),6500);}
+window.toggleMenu=()=>{document.querySelector(".sidebar").classList.toggle("open");$("scrim").classList.toggle("show");};
+window.fillAmt=(inp,tok,frac)=>{const v=Number(BAL[tok]||0n)/1e6*frac;$(inp).value=v>0?Math.floor(v*1e6)/1e6:0;preview();};
 
 /* ---- router ---- */
 const VIEWS=["dashboard","borrow","lend","portfolio","why"];
@@ -380,7 +418,8 @@ const TITLES={dashboard:["Dashboard","Protocol overview"],borrow:["Borrow","Borr
 function route(){let h=(location.hash||"#dashboard").replace("#","");if(!VIEWS.includes(h))h="dashboard";
   document.querySelectorAll(".view").forEach(v=>v.classList.toggle("active",v.id==="view-"+h));
   document.querySelectorAll(".nav-item").forEach(n=>n.classList.toggle("on",n.dataset.view===h));
-  $("crumb").innerHTML="<b>Lodestar</b> / "+TITLES[h][0];$("tt").textContent=TITLES[h][1];window.scrollTo(0,0);}
+  $("crumb").innerHTML="<b>Lodestar</b> / "+TITLES[h][0];$("tt").textContent=TITLES[h][1];window.scrollTo(0,0);
+  document.querySelector(".sidebar").classList.remove("open");$("scrim").classList.remove("show");}
 window.addEventListener("hashchange",route);
 
 function icHTML(k){return `<span class="ic"><img src="${MK[k].img}" alt="${k}"/></span>`;}
@@ -405,7 +444,7 @@ function preview(){const m=MK[COLL],t=m.tiers[TIER],a=parseFloat($("amt").value)
   if($("b-px"))$("b-px").textContent=m.price?usd(m.price):"…";
   if($("b-ltv"))$("b-ltv").textContent=Math.max(...m.tiers.map(x=>x.ltv))+"%";
   if($("b-fee"))$("b-fee").textContent=Math.min(...m.tiers.map(x=>x.fee)).toFixed(1)+"%";
-  const la=parseFloat($("lamt").value)||0;if($("l-shares"))$("l-shares").textContent=la.toLocaleString()+" lodUSD₮0";}
+  const la=parseFloat($("lamt").value)||0;if($("l-shares"))$("l-shares").textContent="≈ "+la.toLocaleString()+" lodUSD₮0";}
 document.querySelectorAll('#collSeg button').forEach(b=>b.onclick=()=>{document.querySelectorAll('#collSeg button').forEach(x=>x.classList.remove('on'));b.classList.add('on');setColl(b.dataset.c);});
 $("amt").addEventListener('input',preview);$("lamt").addEventListener('input',preview);
 
@@ -433,7 +472,7 @@ window.closeWallet=()=>$("wmodal").style.display="none";
 window.openWalletPicker=()=>{
   let list=WALLETS.slice();
   if(!list.length && window.ethereum) list=[{info:{name:"Browser Wallet",icon:""},provider:window.ethereum}];
-  if(!list.length){ alert("No wallet detected. Install MetaMask, Rabby, or Coinbase Wallet."); return; }
+  if(!list.length){ toast('No wallet detected. Install <a href="https://metamask.io/" target="_blank">MetaMask</a>, Rabby, or Coinbase Wallet.',"err"); return; }
   window._WL=list;
   $("wpList").innerHTML=list.map((w,i)=>`<button class="wopt" onclick="pickWallet(${i})">${w.info.icon?`<img src="${w.info.icon}" alt="">`:'<span style="width:24px"></span>'}<span>${w.info.name}</span></button>`).join("");
   $("wmodal").style.display="flex";
@@ -447,7 +486,7 @@ async function connectWith(eip){
     bp=new ethers.BrowserProvider(eip); signer=await bp.getSigner(); account=await signer.getAddress();
     if(eip.on){ eip.on("accountsChanged",()=>location.reload()); eip.on("chainChanged",()=>location.reload()); }
     onConnected();
-  }catch(e){ console.error(e); alert("Connection failed: "+(e.shortMessage||e.message||e)); }
+  }catch(e){ console.error(e); toast("Connection failed: "+(e.shortMessage||e.message||e),"err"); }
 }
 function onConnected(){
   const s=account.slice(0,6)+"…"+account.slice(-4);
@@ -455,7 +494,21 @@ function onConnected(){
   const t=document.querySelector(".acct .t"); if(t) t.innerHTML=`Connected<small class="mono">${s}</small>`;
   const av=document.querySelector(".acct .av"); if(av) av.textContent=account.slice(2,3).toUpperCase();
   $("borrowBtn").textContent="Borrow"; $("lendBtn").textContent="Supply USD₮0";
-  loadPositions();
+  loadPositions(); fetchBalances();
+  toast("Wallet connected.","ok");
+}
+async function fetchBalances(){
+  if(!account) return;
+  try{
+    const rp=new ethers.JsonRpcProvider(RPC);
+    const [fb,ub]=await Promise.all([
+      new ethers.Contract(FXRP_ADDR,ERC20_ABI,rp).balanceOf(account),
+      new ethers.Contract(USDT0_ADDR,ERC20_ABI,rp).balanceOf(account)
+    ]);
+    BAL.FXRP=fb; BAL.USDT0=ub;
+    setTx("balFXRP",(Number(fb)/1e6).toLocaleString(undefined,{maximumFractionDigits:2}));
+    setTx("balUSDT0",(Number(ub)/1e6).toLocaleString(undefined,{maximumFractionDigits:2}));
+  }catch(e){ console.error("balances",e); }
 }
 $("connect").onclick=openWalletPicker;
 const C=(a,abi)=>new ethers.Contract(a,abi,signer);
@@ -465,43 +518,43 @@ function busy(b,t){b.disabled=true;b.dataset.t=b.textContent;b.textContent=t;}
 function unbusy(b,t){b.disabled=false;b.textContent=t||b.dataset.t;}
 window.doBorrow=async()=>{
   if(!account) return openWalletPicker();
-  const m=MK[COLL]; if(!m.live){ alert(m.name+" is coming soon on Coston2."); return; }
+  const m=MK[COLL]; if(!m.live){ toast(m.name+" is coming soon on Coston2."); return; }
   const btn=$("borrowBtn"), amt=u6($("amt").value);
-  if(amt<=0n){ alert("Enter a collateral amount."); return; }
+  if(amt<=0n){ toast("Enter a collateral amount."); return; }
   try{
     const tok=C(FXRP_ADDR,ERC20_ABI), book=C(BOOK,BOOK_ABI);
-    if(await tok.balanceOf(account)<amt){ alert("Not enough FXRP, get test FXRP at https://faucet.flare.network/"); return; }
+    if(await tok.balanceOf(account)<amt){ toast('Not enough FXRP. Get test tokens from the <a href="https://faucet.flare.network/" target="_blank">Flare faucet</a>.',"err"); return; }
     if(await tok.allowance(account,BOOK)<amt){ busy(btn,"Approving FXRP…"); await (await tok.approve(BOOK,amt)).wait(); }
     busy(btn,"Borrowing…"); await (await book.open(FXRP_ADDR,amt,BigInt(TIER))).wait();
-    unbusy(btn,"Borrow"); alert("Borrowed, USD₮0 sent to your wallet."); refreshAll();
-  }catch(e){ unbusy(btn,"Borrow"); console.error(e); alert("Borrow failed: "+errMsg(e)); }
+    unbusy(btn,"Borrow"); toast("Borrow complete. USD₮0 is in your wallet.","ok"); refreshAll();
+  }catch(e){ unbusy(btn,"Borrow"); console.error(e); toast("Borrow failed: "+errMsg(e),"err"); }
 };
 window.doDeposit=async()=>{
   if(!account) return openWalletPicker();
   const btn=$("lendBtn"), amt=u6($("lamt").value);
-  if(amt<=0n){ alert("Enter a deposit amount."); return; }
+  if(amt<=0n){ toast("Enter a deposit amount."); return; }
   try{
     const tok=C(USDT0_ADDR,ERC20_ABI), pool=C(POOL,POOLW_ABI);
-    if(await tok.balanceOf(account)<amt){ alert("Not enough USD₮0, get test USD₮0 at https://faucet.flare.network/"); return; }
+    if(await tok.balanceOf(account)<amt){ toast('Not enough USD₮0. Get test tokens from the <a href="https://faucet.flare.network/" target="_blank">Flare faucet</a>.',"err"); return; }
     if(await tok.allowance(account,POOL)<amt){ busy(btn,"Approving USD₮0…"); await (await tok.approve(POOL,amt)).wait(); }
     busy(btn,"Supplying…"); await (await pool.deposit(amt,account)).wait();
-    unbusy(btn,"Supply USD₮0"); alert("Supplied, you received lodUSD₮0 shares."); refreshAll();
-  }catch(e){ unbusy(btn,"Supply USD₮0"); console.error(e); alert("Deposit failed: "+errMsg(e)); }
+    unbusy(btn,"Supply USD₮0"); toast("Deposit complete. You're now earning.","ok"); refreshAll();
+  }catch(e){ unbusy(btn,"Supply USD₮0"); console.error(e); toast("Deposit failed: "+errMsg(e),"err"); }
 };
 window.doRepay=async(id,due)=>{
   if(!account) return openWalletPicker();
   try{
     const tok=C(USDT0_ADDR,ERC20_ABI), book=C(BOOK,BOOK_ABI), need=BigInt(due);
-    if(await tok.balanceOf(account)<need){ alert("Need "+usd(Number(need)/1e6)+" USD₮0 to repay."); return; }
-    if(await tok.allowance(account,POOL)<need){ await (await tok.approve(POOL,need)).wait(); }
-    await (await book.repay(BigInt(id))).wait();
-    alert("Repaid, collateral returned."); refreshAll();
-  }catch(e){ console.error(e); alert("Repay failed: "+errMsg(e)); }
+    if(await tok.balanceOf(account)<need){ toast("You need "+usd(Number(need)/1e6)+" USD₮0 to repay this loan.","err"); return; }
+    if(await tok.allowance(account,POOL)<need){ toast("Approve USD₮0…"); await (await tok.approve(POOL,need)).wait(); }
+    toast("Repaying…"); await (await book.repay(BigInt(id))).wait();
+    toast("Repaid. Your collateral is back in your wallet.","ok"); refreshAll();
+  }catch(e){ console.error(e); toast("Repay failed: "+errMsg(e),"err"); }
 };
 window.doWithdraw=async()=>{
   if(!account) return;
-  try{ const pool=C(POOL,POOLW_ABI); const sh=await pool.balanceOf(account); await (await pool.redeem(sh,account,account)).wait(); alert("Withdrawn."); refreshAll(); }
-  catch(e){ console.error(e); alert("Withdraw failed: "+errMsg(e)); }
+  try{ const pool=C(POOL,POOLW_ABI); const sh=await pool.balanceOf(account); toast("Withdrawing…"); await (await pool.redeem(sh,account,account)).wait(); toast("Withdrawn to your wallet.","ok"); refreshAll(); }
+  catch(e){ console.error(e); toast("Withdraw failed: "+errMsg(e),"err"); }
 };
 const emptyHTML=(t,s)=>`<div class="empty" style="padding:28px"><b>${t}</b>${s}</div>`;
 async function loadPositions(){
@@ -519,19 +572,22 @@ async function loadPositions(){
     const pool=new ethers.Contract(POOL,POOLW_ABI,rp);
     const sh=await pool.balanceOf(account), val=sh>0n?await pool.convertToAssets(sh):0n;
     if($("mylend")) $("mylend").innerHTML = sh>0n
-      ? `<div class="posrow"><div><b>${usd(Number(val)/1e6)}</b><small>${(Number(sh)/1e6).toLocaleString()} lodUSD₮0 · redeemable anytime</small></div><button class="btn btn-ln btn-sm" onclick="doWithdraw()">Withdraw</button></div>`
+      ? `<div class="posrow"><div><b>${usd(Number(val)/1e6)}</b><small>${(Number(sh)/1e12).toLocaleString(undefined,{maximumFractionDigits:2})} lodUSD₮0 · redeemable anytime</small></div><button class="btn btn-ln btn-sm" onclick="doWithdraw()">Withdraw</button></div>`
       : emptyHTML("No deposit","Supply USD₮0 to start earning.");
   }catch(e){ console.error("positions",e); }
 }
-function refreshAll(){ loadChain(); loadPositions(); }
-rows();terms();setColl("FXRP");route();loadChain();setInterval(loadChain,15000);
+function refreshAll(){ loadChain(); loadPositions(); fetchBalances(); }
+rows();terms();setColl("FXRP");route();loadChain();setInterval(()=>{loadChain();if(account)fetchBalances();},15000);
 </script>
 
+<div class="scrim" id="scrim" onclick="toggleMenu()"></div>
+<div class="toasts" id="toasts"></div>
 <div id="wmodal" class="wmodal" style="display:none" onclick="if(event.target===this)closeWallet()">
   <div class="wcard2">
     <div class="wh"><b>Connect a wallet</b><button class="wx" onclick="closeWallet()">✕</button></div>
+    <div class="wsub">Pick an installed wallet to connect on Coston2 testnet.</div>
     <div id="wpList" class="wlist"></div>
-    <div class="wfoot">Coston2 testnet · chainId 114</div>
+    <div class="wfoot">Chain ID 114 · you'll be prompted to switch networks</div>
   </div>
 </div>
 </body>
