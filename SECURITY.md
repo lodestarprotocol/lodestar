@@ -46,6 +46,17 @@ suite — **8/8 passing** (6 unit + 2 live-Flare fork). CEI ordering re-confirme
 hand: `principalOut` is incremented by exactly `principal` at `open` and decremented by the same at
 `repay`/`settle`, so any settlement shortfall is realized transparently through the ERC4626 share price.
 
+## Hardening v1.1 — 2026-07-17
+
+Backed by a fuzz + adversarial battery (`test/invariant`, `test/security`):
+- **Invariant suite** — 256 runs × 128k calls each, 0 reverts: `principalOut == Σ active principals`, collateral custody exact, USD exposure exact, no zero-principal loans.
+- **Adversarial suite** — access control, ERC4626 inflation attack, keeper floor extraction, no-liquidation-in-term, transparent bad-debt realization, LTV cap, pause, oracle-outage fallback.
+
+New improvements shipped (for the next redeploy; live Coston2 runs v1.0):
+- **Pause switch** — `setPaused` blocks *new borrows only*; repay/rollover/settle stay open, so it never traps collateral (non-custodial).
+- **Oracle-outage fallback** — if FTSO reverts during settlement, the floor bypass only unlocks once past `oracleFallbackDelay` (default 7d, bounded), so a transient outage can't underprice a sale, but bad debt is *always* eventually resolvable.
+- **Gas** — `stableUnit` cached as immutable (removes an EXP from the per-loan hot path).
+
 ### Still open (accepted / deferred)
 - Keeper bounty (5%, in-kind) is taken before lenders on underwater loans — accepted design; could cap by USD later.
 - `rollover`/`repay` are callable by anyone on behalf of a borrower — harmless (they only *help* the borrower).

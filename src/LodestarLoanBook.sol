@@ -42,6 +42,7 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     LodestarOracle public immutable oracle;
     IERC20 public immutable stable;
     uint8 public immutable stableDecimals;
+    uint256 public immutable stableUnit; // 10**stableDecimals, cached to avoid EXP in the hot path
 
     // --- params (owner-set; intended to sit behind a timelock/multisig in prod) ---
     address public reserve;
@@ -52,6 +53,8 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     uint16 public feeReserveBps = 2000; // 20% of every fee to reserve, remainder to lenders
     uint16 public settleFloorBps = 9800; // keeper swap must clear >= 98% of FTSO value
     uint32 public maxLoanLife = 90 days;
+    uint64 public oracleFallbackDelay = 7 days; // once this far past due, a defaulted loan can settle even if FTSO is down
+    bool public paused; // when true, blocks NEW borrows only; repay/rollover/settle stay open (non-custodial)
 
     mapping(address => Tier[]) public tiers; // per-collateral tiers
     mapping(address => uint256) public exposureUsd18; // outstanding principal per collateral (usd18)
@@ -80,6 +83,8 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     error NotYetDefaulted();
     error Expired();
     error BadParam();
+    error Paused();
+    error OracleDown();
 
     constructor(LodestarPool _pool, LodestarOracle _oracle, address _reserve, address _owner) Ownable(_owner) {
         if (_reserve == address(0)) revert BadParam();
@@ -87,6 +92,7 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         oracle = _oracle;
         stable = IERC20(_pool.asset());
         stableDecimals = IERC20Metadata(_pool.asset()).decimals();
+        stableUnit = 10 ** stableDecimals;
         reserve = _reserve;
     }
 
@@ -124,6 +130,17 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         settleFloorBps = bps;
     }
 
+    /// @notice Pause new borrows in an emergency. Existing loans, repay, and settlement are unaffected.
+    function setPaused(bool p) external onlyOwner {
+        paused = p;
+    }
+
+    /// @notice How long past a deadline a loan can settle without a working oracle (bounded).
+    function setOracleFallbackDelay(uint64 d) external onlyOwner {
+        if (d < 1 days || d > 30 days) revert BadParam();
+        oracleFallbackDelay = d;
+    }
+
     // ------------------------------------------------------------------ views
     function tierCount(address collateral) external view returns (uint256) {
         return tiers[collateral].length;
@@ -140,6 +157,7 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         nonReentrant
         returns (uint256 id)
     {
+        if (paused) revert Paused();
         Tier[] storage ts = tiers[collateral];
         if (ts.length == 0) revert NotSupported();
         if (tierIndex >= ts.length) revert BadTier();
@@ -222,7 +240,7 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     }
 
     /// @notice Permissionless settlement of a defaulted loan (deadline + grace elapsed).
-    /// @param minOut Keeper's own min-out; the effective floor is max(minOut, 95% of FTSO value).
+    /// @param minOut Keeper's own min-out; the effective floor is max(minOut, settleFloorBps of FTSO value).
     function settle(uint256 id, uint256 minOut) external nonReentrant {
         Loan storage L = loans[id];
         if (!L.active) revert NotActive();
@@ -242,7 +260,15 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         uint256 toSell = L.collAmount - bounty;
         IERC20(L.collateral).safeTransfer(msg.sender, bounty);
 
-        uint256 floor = (_usd18ToStable(oracle.usdValue18(L.collateral, toSell)) * settleFloorBps) / 10_000;
+        // FTSO-anchored floor. If the oracle is unavailable, only allow a floor bypass once well past
+        // due (oracleFallbackDelay) so a transient outage can never be used to underprice a settlement.
+        uint256 floor;
+        try oracle.usdValue18(L.collateral, toSell) returns (uint256 v) {
+            floor = (_usd18ToStable(v) * settleFloorBps) / 10_000;
+        } catch {
+            if (block.timestamp <= uint256(L.dueAt) + oracleFallbackDelay) revert OracleDown();
+            floor = 0; // keeper's own minOut becomes the only bound
+        }
         uint256 minOutEff = minOut > floor ? minOut : floor;
 
         IERC20(L.collateral).forceApprove(address(router), toSell);
@@ -288,6 +314,6 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     }
 
     function _usd18ToStable(uint256 usd18) internal view returns (uint256) {
-        return (usd18 * (10 ** stableDecimals)) / 1e18;
+        return (usd18 * stableUnit) / 1e18;
     }
 }

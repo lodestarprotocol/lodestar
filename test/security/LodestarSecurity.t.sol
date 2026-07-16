@@ -133,6 +133,45 @@ contract LodestarSecurityTest is Test {
         assertFalse(active);
     }
 
+    /// Pause blocks NEW borrows but never touches existing loans or funds.
+    function test_PauseBlocksBorrowsOnly() public {
+        uint256 id = _borrow(borrower, 1_000e6); // open one before pausing
+        book.setPaused(true);
+        // new borrow blocked
+        fxrp.mint(attacker, 1_000e6);
+        vm.startPrank(attacker);
+        fxrp.approve(address(book), 1_000e6);
+        vm.expectRevert(LodestarLoanBook.Paused.selector);
+        book.open(address(fxrp), 1_000e6, 0);
+        vm.stopPrank();
+        // existing loan can still be repaid while paused (non-custodial)
+        (,,, uint256 principal, uint256 fee,,,,) = book.loans(id);
+        usdt0.mint(borrower, principal + fee);
+        vm.startPrank(borrower);
+        usdt0.approve(address(pool), principal + fee);
+        book.repay(id);
+        vm.stopPrank();
+        assertEq(fxrp.balanceOf(borrower), 1_000e6, "collateral not returned while paused");
+    }
+
+    /// A defaulted loan is always settleable: if FTSO is down, the floor bypasses only after the delay.
+    function test_OracleOutageFallbackSettlement() public {
+        uint256 id = _borrow(borrower, 1_000e6);
+        ftso.set(XRP, 0, 8); // oracle now reverts (BadPrice)
+        router.setRate(25, 10);
+        // past due + 48h grace, but not yet past the 7-day oracle-fallback delay -> must revert
+        vm.warp(block.timestamp + 7 days + 48 hours + 1);
+        vm.prank(keeper);
+        vm.expectRevert(LodestarLoanBook.OracleDown.selector);
+        book.settle(id, 100e6);
+        // once past the oracle-fallback delay, settlement proceeds on the keeper's minOut
+        vm.warp(block.timestamp + 7 days);
+        vm.prank(keeper);
+        book.settle(id, 100e6);
+        (,,,,,,,, bool active) = book.loans(id);
+        assertFalse(active, "defaulted loan not resolved after oracle-fallback delay");
+    }
+
     /// Borrow amount can never exceed the tier LTV of the FTSO-valued collateral.
     function test_CannotBorrowAboveLTV() public {
         uint256 id = _borrow(borrower, 1_000e6); // 1000 FXRP @ $2.50 = $2500, 50% LTV
