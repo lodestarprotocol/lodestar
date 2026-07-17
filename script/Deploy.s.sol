@@ -48,7 +48,7 @@ contract Deploy is Script {
 
         vm.stopBroadcast();
 
-        console.log("=== Lodestar v1.4 deployed to Coston2 (114) ===");
+        console.log("=== Lodestar v1.5 deployed to Coston2 (114) ===");
         console.log("LodestarOracle  ", address(oracle));
         console.log("LodestarPool    ", address(pool));
         console.log("LodestarLoanBook", address(book));

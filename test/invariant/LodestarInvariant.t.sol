@@ -256,6 +256,17 @@ contract LodestarInvariant is StdInvariant, Test {
         assertEq(stable.balanceOf(address(book)), book.reserveBalance(), "stable stranded or missing in book");
     }
 
+    /// The active-loan sweep set exactly equals the set of active loans (no ghost/missing ids).
+    function invariant_activeArrayMatchesLoans() public view {
+        uint256 active;
+        uint256 n = h.idsLength();
+        for (uint256 i; i < n; i++) {
+            (,,,,,,,, bool a,,) = book.loans(h.ids(i));
+            if (a) active++;
+        }
+        assertEq(book.activeLoanCount(), active, "activeLoanIds drift vs active loans");
+    }
+
     /// The pool's aggregate markdown equals the sum of active per-loan marks.
     function invariant_impairmentMatchesLoans() public view {
         uint256 sum;

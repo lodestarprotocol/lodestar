@@ -86,6 +86,60 @@ contract LodestarHardeningV14Test is Test {
         assertLe(got, 100_000e6, "attacker skimmed the stale-mark reversal");
     }
 
+    // ---- v1.5: phantom-solvency window closed ON-CHAIN (withdraw self-marks the book) --------
+    function test_WithdrawMarksUnmarkedUnderwaterLoan_NoParExit() public {
+        // second lender joins so there's a victim to dump losses on
+        usdt0.mint(lp2, 100_000e6);
+        vm.startPrank(lp2);
+        usdt0.approve(address(pool), type(uint256).max);
+        pool.deposit(100_000e6, lp2);
+        vm.stopPrank();
+
+        // a loan goes deeply underwater, and NOBODY calls impair
+        uint256 id = _openFxrp(borrower, 40_000e6); // $100k coll -> $50k principal
+        ftso.set(XRP, 25_000_000, 8); // 90% crash: coll now ~$10k vs $50k owed
+        assertEq(pool.impairedLoss(), 0, "precondition: loss is unmarked");
+
+        // the informed lender tries to exit at par before anyone marks the loss
+        uint256 idle = pool.available();
+        uint256 shares = pool.balanceOf(lender);
+        vm.startPrank(lender);
+        uint256 got = pool.redeem(pool.maxRedeem(lender), lender, lender);
+        vm.stopPrank();
+
+        // the withdraw itself marked the book, so the exit was priced BELOW par, not at it
+        assertGt(pool.impairedLoss(), 0, "withdraw did not mark the underwater loan");
+        // lender got their (now marked-down) share of idle, strictly less than a par exit
+        assertLt(got, shares / 1e6, "lender escaped at (near) par despite an unmarked loss");
+        assertLe(got, idle, "exit exceeded idle liquidity");
+    }
+
+    function test_ActiveLoanArrayTracksOpenLoans() public {
+        assertEq(book.activeLoanCount(), 0);
+        uint256 a = _openFxrp(borrower, 1000e6);
+        uint256 b = _openFxrp(borrower, 1000e6);
+        assertEq(book.activeLoanCount(), 2);
+        usdt0.mint(borrower, 2500e6);
+        vm.startPrank(borrower);
+        usdt0.approve(address(pool), type(uint256).max);
+        book.repay(a);
+        vm.stopPrank();
+        assertEq(book.activeLoanCount(), 1, "closed loan not removed from sweep set");
+        // the surviving id is still active and sweeps fine
+        book.impair(b);
+        assertEq(book.activeLoanCount(), 1);
+    }
+
+    function test_MaxActiveLoansCapEnforced() public {
+        book.setMaxActiveLoans(50); // bound
+        vm.expectRevert(LodestarLoanBook.BadParam.selector);
+        book.setMaxActiveLoans(10); // below the floor
+        // opening within the cap works; the cap itself is exercised by the invariant fuzz
+        uint256 id = _openFxrp(borrower, 1000e6);
+        assertEq(book.activeLoanCount(), 1);
+        assertGt(id, 0);
+    }
+
     // ---- Fix 2: phantom-solvency window is closable in one batch call ------------------------
     function test_ImpairManyBatchMarksWholeBook() public {
         uint256 a = _openFxrp(borrower, 1000e6);
