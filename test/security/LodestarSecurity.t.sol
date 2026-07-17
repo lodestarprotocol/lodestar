@@ -6,7 +6,6 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {LodestarOracle} from "../../src/LodestarOracle.sol";
 import {LodestarPool} from "../../src/LodestarPool.sol";
 import {LodestarLoanBook} from "../../src/LodestarLoanBook.sol";
-import {IDexRouter} from "../../src/interfaces/IDexRouter.sol";
 import {MockERC20, MockFtsoV2, MockRouter} from "../Lodestar.t.sol";
 
 /// @notice Adversarial suite: each test *tries* to break a security property and asserts it can't.
@@ -32,12 +31,12 @@ contract LodestarSecurityTest is Test {
         ftso = new MockFtsoV2();
         ftso.set(XRP, 250_000_000, 8); // $2.50
         oracle = new LodestarOracle(address(ftso), owner);
-        oracle.setFeed(address(fxrp), XRP, address(0), 0);
+        oracle.setFeed(address(fxrp), XRP, address(0), 1 hours);
         pool = new LodestarPool(IERC20(address(usdt0)), owner);
         book = new LodestarLoanBook(pool, oracle, owner, owner);
         pool.setLoanBook(address(book));
         router = new MockRouter();
-        book.setRouter(IDexRouter(address(router)));
+        book.setRouterAllowed(address(router), true);
         book.addTier(address(fxrp), 5000, 7 days, 200);
 
         usdt0.mint(owner, 100_000e6);
@@ -54,15 +53,26 @@ contract LodestarSecurityTest is Test {
         vm.stopPrank();
     }
 
+    function _swapData(uint256 amountIn) internal view returns (bytes memory) {
+        address[] memory path = new address[](2);
+        path[0] = address(fxrp);
+        path[1] = address(usdt0);
+        return abi.encodeCall(MockRouter.swapExactTokensForTokens, (amountIn, 0, path, address(book), block.timestamp));
+    }
+
     /// Pool funds can only ever be moved by the loan book.
     function test_OnlyLoanBookCanMovePoolFunds() public {
         vm.startPrank(attacker);
         vm.expectRevert(LodestarPool.NotLoanBook.selector);
-        pool.disburse(attacker, 1e6);
+        pool.disburse(attacker, 1e6, 1e6);
         vm.expectRevert(LodestarPool.NotLoanBook.selector);
         pool.payout(attacker, 1e6);
         vm.expectRevert(LodestarPool.NotLoanBook.selector);
         pool.pull(owner, 1e6);
+        vm.expectRevert(LodestarPool.NotLoanBook.selector);
+        pool.impair(1e6);
+        vm.expectRevert(LodestarPool.NotLoanBook.selector);
+        pool.unimpair(1e6);
         vm.stopPrank();
     }
 
@@ -76,7 +86,6 @@ contract LodestarSecurityTest is Test {
     /// ERC4626 first-depositor / donation inflation attack must not grief a later depositor.
     function test_InflationAttackMitigated() public {
         LodestarPool p = new LodestarPool(IERC20(address(usdt0)), owner); // fresh, unseeded
-        // attacker deposits 1 unit, then donates a large amount to spike the share price
         usdt0.mint(attacker, 1);
         vm.startPrank(attacker);
         usdt0.approve(address(p), type(uint256).max);
@@ -84,25 +93,63 @@ contract LodestarSecurityTest is Test {
         usdt0.mint(attacker, 10_000e6);
         usdt0.transfer(address(p), 10_000e6); // donation
         vm.stopPrank();
-        // victim deposits 1,000 USDT0
         usdt0.mint(victim, 1_000e6);
         vm.startPrank(victim);
         usdt0.approve(address(p), type(uint256).max);
         uint256 shares = p.deposit(1_000e6, victim);
         vm.stopPrank();
         assertGt(shares, 0, "victim minted 0 shares -> attack succeeded");
-        // victim can redeem back essentially their deposit (>99%)
         assertGe(p.previewRedeem(shares), 990e6, "victim lost >1% to inflation");
     }
 
-    /// A keeper cannot settle a swap that returns less than the FTSO-anchored floor.
-    function test_KeeperCannotSettleBelowFtsoFloor() public {
+    /// A keeper cannot settle a swap that returns less than the Dutch floor.
+    function test_KeeperCannotSettleBelowFloor() public {
         uint256 id = _borrow(borrower, 1_000e6);
         vm.warp(block.timestamp + 7 days + 48 hours + 1);
-        router.setRate(50, 100); // pays only ~50% of value, below the 98% floor
+        router.setRate(50, 100); // pays only ~50% of value, far below any floor level
         vm.prank(keeper);
-        vm.expectRevert(bytes("MockRouter: slippage"));
-        book.settle(id, 0);
+        vm.expectRevert(LodestarLoanBook.BelowFloor.selector);
+        book.settleSwap(id, address(router), _swapData(950e6), 0);
+        // even after the full decay the floor is 85%: still rejected
+        vm.warp(block.timestamp + 7 days);
+        vm.prank(keeper);
+        vm.expectRevert(LodestarLoanBook.BelowFloor.selector);
+        book.settleSwap(id, address(router), _swapData(950e6), 0);
+    }
+
+    /// A keeper cannot route the sale through an unapproved contract.
+    function test_KeeperCannotUseRogueRouter() public {
+        uint256 id = _borrow(borrower, 1_000e6);
+        vm.warp(block.timestamp + 7 days + 48 hours + 1);
+        MockRouter rogue = new MockRouter();
+        usdt0.mint(address(rogue), 10_000e6);
+        vm.prank(attacker);
+        vm.expectRevert(LodestarLoanBook.RouterNotAllowed.selector);
+        book.settleSwap(id, address(rogue), _swapData(950e6), 0);
+    }
+
+    /// A buyout below the current Dutch floor is impossible: cost is computed by the contract.
+    function test_BuyoutAlwaysPaysTheFloor() public {
+        uint256 id = _borrow(borrower, 1_000e6);
+        vm.warp(block.timestamp + 7 days + 48 hours + 1);
+        uint256 cost = book.buyoutCost(id); // ~$2500 right after default
+        usdt0.mint(attacker, cost);
+        vm.startPrank(attacker);
+        usdt0.approve(address(book), type(uint256).max);
+        book.buyout(id, type(uint256).max);
+        vm.stopPrank();
+        assertEq(usdt0.balanceOf(attacker), 0, "attacker paid the full floor cost");
+        assertApproxEqRel(cost, 2_500e6, 0.01e18, "floor ~= full FTSO value at default");
+    }
+
+    /// A defaulting borrower earns no keeper bounty by settling their own loan.
+    function test_BorrowerCannotFarmOwnDefaultBounty() public {
+        uint256 id = _borrow(borrower, 1_000e6);
+        router.setRate(25, 10);
+        vm.warp(block.timestamp + 7 days + 48 hours + 1);
+        vm.prank(borrower);
+        book.settleSwap(id, address(router), _swapData(1_000e6), 0);
+        assertEq(fxrp.balanceOf(borrower), 0, "borrower extracted a bounty from their own default");
     }
 
     /// A price crash cannot liquidate an in-term loan, no matter how deep.
@@ -110,74 +157,123 @@ contract LodestarSecurityTest is Test {
         uint256 id = _borrow(borrower, 1_000e6);
         ftso.set(XRP, 25_000_000, 8); // XRP crashes 90% to $0.25
         vm.expectRevert(LodestarLoanBook.NotYetDefaulted.selector);
-        book.settle(id, 0);
+        book.buyout(id, type(uint256).max);
+        vm.expectRevert(LodestarLoanBook.NotYetDefaulted.selector);
+        book.settleSwap(id, address(router), _swapData(950e6), 0);
+        vm.expectRevert(LodestarLoanBook.NotYetDefaulted.selector);
+        book.impair(id);
         assertFalse(book.isDefaulted(id));
+    }
+
+    /// An underwater position cannot buy itself more time: rollover re-checks LTV.
+    function test_UnderwaterRolloverBlocked() public {
+        uint256 id = _borrow(borrower, 1_000e6);
+        ftso.set(XRP, 150_000_000, 8); // -40%: $1500 collateral vs $1250 principal
+        usdt0.mint(borrower, 100e6);
+        vm.startPrank(borrower);
+        usdt0.approve(address(pool), type(uint256).max);
+        vm.expectRevert(LodestarLoanBook.Undercollateralized.selector);
+        book.rollover(id, 0);
+        vm.stopPrank();
     }
 
     /// On genuine bad debt, the loss is realized transparently through the pool (no hidden insolvency).
     function test_BadDebtRealizedTransparently() public {
         uint256 id = _borrow(borrower, 1_000e6); // $2500 collateral, $1250 principal
-        // deep crash so the sale can't cover the debt
         ftso.set(XRP, 50_000_000, 8); // $0.50
-        router.setRate(5, 10); // router pays $0.50 per FXRP (matches crashed oracle)
+        router.setRate(5, 10); // router pays $0.50 per FXRP, matching the crashed oracle
         vm.warp(block.timestamp + 7 days + 48 hours + 1);
 
         uint256 assetsBefore = pool.totalAssets();
         vm.prank(keeper);
-        book.settle(id, 0);
+        book.settleSwap(id, address(router), _swapData(950e6), 0);
 
         assertEq(pool.principalOut(), 0, "principal not cleared after settlement");
         assertLt(pool.totalAssets(), assetsBefore, "loss not realized (phantom solvency)");
-        // and the loan is closed, so it can't be re-settled or double-counted
-        (,,,,,,,, bool active,) = book.loans(id);
+        (,,,,,,,, bool active,,) = book.loans(id);
         assertFalse(active);
+    }
+
+    /// impair() cannot be used to grief the pool: it only ever marks the oracle-true loss,
+    /// re-marks track the price, and repayment reverses the mark exactly.
+    function test_ImpairCannotOvermark() public {
+        uint256 id = _borrow(borrower, 1_000e6);
+        vm.warp(block.timestamp + 7 days + 48 hours + 1);
+
+        // healthy collateral: impair marks zero
+        book.impair(id);
+        assertEq(pool.impairedLoss(), 0, "no loss to mark while covered");
+
+        // crash: mark appears; recovery: mark shrinks back
+        ftso.set(XRP, 50_000_000, 8);
+        book.impair(id);
+        uint256 marked = pool.impairedLoss();
+        assertGt(marked, 0);
+        ftso.set(XRP, 200_000_000, 8); // $2.00: collateral covers again
+        book.impair(id);
+        assertEq(pool.impairedLoss(), 0, "mark not reversed on recovery");
     }
 
     /// Pause blocks NEW borrows but never touches existing loans or funds.
     function test_PauseBlocksBorrowsOnly() public {
-        uint256 id = _borrow(borrower, 1_000e6); // open one before pausing
+        uint256 id = _borrow(borrower, 1_000e6);
         book.setPaused(true);
-        // new borrow blocked
         fxrp.mint(attacker, 1_000e6);
         vm.startPrank(attacker);
         fxrp.approve(address(book), 1_000e6);
         vm.expectRevert(LodestarLoanBook.Paused.selector);
         book.open(address(fxrp), 1_000e6, 0);
         vm.stopPrank();
-        // existing loan can still be repaid while paused (non-custodial)
-        (,,, uint256 principal, uint256 fee,,,,,) = book.loans(id);
-        usdt0.mint(borrower, principal + fee);
+        // existing loan can still be repaid while paused (non-custodial); repay is principal-only
+        (,,, uint256 principal,,,,,,,) = book.loans(id);
+        usdt0.mint(borrower, principal);
         vm.startPrank(borrower);
-        usdt0.approve(address(pool), principal + fee);
+        usdt0.approve(address(pool), principal);
         book.repay(id);
         vm.stopPrank();
         assertEq(fxrp.balanceOf(borrower), 1_000e6, "collateral not returned while paused");
     }
 
-    /// A defaulted loan is always settleable: if FTSO is down, the floor bypasses only after the delay.
-    function test_OracleOutageFallbackSettlement() public {
-        uint256 id = _borrow(borrower, 1_000e6);
+    /// FTSO outage: settlement waits inside the fallback delay, then proceeds against the
+    /// CACHED price floor — an outage can never be exploited to underprice a sale.
+    function test_OracleOutageCachedFloorSettlement() public {
+        uint256 id = _borrow(borrower, 1_000e6); // caches $2.50 at open
         ftso.set(XRP, 0, 8); // oracle now reverts (BadPrice)
         router.setRate(25, 10);
-        // past due + 48h grace, but not yet past the 7-day oracle-fallback delay -> must revert
         vm.warp(block.timestamp + 7 days + 48 hours + 1);
         vm.prank(keeper);
         vm.expectRevert(LodestarLoanBook.OracleDown.selector);
-        book.settle(id, 100e6);
-        // once past the oracle-fallback delay, settlement proceeds on the keeper's minOut
-        vm.warp(block.timestamp + 7 days);
+        book.settleSwap(id, address(router), _swapData(950e6), 100e6);
+
+        vm.warp(block.timestamp + 7 days); // past the oracle-fallback delay
+        // a keeper trying to self-deal at 40% of the cached value is still rejected
+        router.setRate(10, 10);
         vm.prank(keeper);
-        book.settle(id, 100e6);
-        (,,,,,,,, bool active,) = book.loans(id);
+        vm.expectRevert(LodestarLoanBook.BelowFloor.selector);
+        book.settleSwap(id, address(router), _swapData(950e6), 0);
+        // a fair fill against the cached price clears
+        router.setRate(25, 10);
+        vm.prank(keeper);
+        book.settleSwap(id, address(router), _swapData(950e6), 0);
+        (,,,,,,,, bool active,,) = book.loans(id);
         assertFalse(active, "defaulted loan not resolved after oracle-fallback delay");
     }
 
     /// Borrow amount can never exceed the tier LTV of the FTSO-valued collateral.
     function test_CannotBorrowAboveLTV() public {
         uint256 id = _borrow(borrower, 1_000e6); // 1000 FXRP @ $2.50 = $2500, 50% LTV
-        (,,, uint256 principal,,,,,,) = book.loans(id);
-        // principal (6dp USDT0) must be <= 50% of $2500 = $1250
+        (,,, uint256 principal,,,,,,,) = book.loans(id);
         assertLe(principal, 1_250e6, "borrowed above LTV");
         assertApproxEqAbs(principal, 1_250e6, 1, "LTV math off");
+    }
+
+    /// The stable the book holds is exactly the first-loss buffer: settlement can't strand funds.
+    function test_BookHoldsExactlyTheBuffer() public {
+        uint256 id = _borrow(borrower, 1_000e6);
+        router.setRate(25, 10);
+        vm.warp(block.timestamp + 7 days + 48 hours + 1);
+        vm.prank(keeper);
+        book.settleSwap(id, address(router), _swapData(950e6), 0);
+        assertEq(usdt0.balanceOf(address(book)), book.reserveBalance(), "stable stranded in the book");
     }
 }

@@ -68,6 +68,18 @@ contract MockRouter is IDexRouter {
     }
 }
 
+/// @dev Router that takes less than the requested amount — must trip SwapIncomplete.
+contract SkimmingRouter {
+    function swapExactTokensForTokens(uint256 amountIn, uint256, address[] calldata path, address to, uint256)
+        external
+        returns (uint256[] memory amounts)
+    {
+        IERC20(path[0]).transferFrom(msg.sender, address(this), amountIn / 2); // takes only half
+        IERC20(path[1]).transfer(to, 1);
+        amounts = new uint256[](2);
+    }
+}
+
 contract MockRate is ILstRateProvider {
     uint256 public rate = 1e18;
 
@@ -97,6 +109,7 @@ contract LodestarTest is Test {
     address lender = address(0x1E7D);
     address borrower = address(0xB0B);
     address keeper = address(0xC0FFEE);
+    address buyer = address(0xB1D);
 
     bytes21 constant XRP_USD = bytes21("XRP/USD");
     bytes21 constant FLR_USD = bytes21("FLR/USD");
@@ -113,19 +126,19 @@ contract LodestarTest is Test {
         sflrRate = new MockRate(); // 1 sFLR = 1 FLR initially
 
         oracle = new LodestarOracle(address(ftso), owner);
-        oracle.setFeed(address(fxrp), XRP_USD, address(0), 0);
-        oracle.setFeed(address(sflr), FLR_USD, address(sflrRate), 0);
+        oracle.setFeed(address(fxrp), XRP_USD, address(0), 1 hours);
+        oracle.setFeed(address(sflr), FLR_USD, address(sflrRate), 1 hours);
 
         pool = new LodestarPool(IERC20(address(usdt0)), owner);
         book = new LodestarLoanBook(pool, oracle, reserve, owner);
         pool.setLoanBook(address(book));
 
         router = new MockRouter();
-        book.setRouter(router);
+        book.setRouterAllowed(address(router), true);
 
-        // FXRP tier: 50% LTV, 7d, 2% fee. sFLR tier: 60% LTV, 30d, 3% fee.
+        // FXRP tier: 50% LTV, 7d, 2% fee. sFLR tier: 55% LTV, 30d, 3% fee (calibrated v1.3).
         book.addTier(address(fxrp), 5000, 7 days, 200);
-        book.addTier(address(sflr), 6000, 30 days, 300);
+        book.addTier(address(sflr), 5500, 30 days, 300);
 
         // seed lender pool with 100k USDT0
         usdt0.mint(lender, 100_000e6);
@@ -138,21 +151,41 @@ contract LodestarTest is Test {
         usdt0.mint(address(router), 1_000_000e6);
     }
 
-    function test_OpenAndRepay() public {
-        // borrower locks 1000 FXRP (@ $2.50 = $2500), 50% LTV -> $1250 principal, 2% fee = $25
-        fxrp.mint(borrower, 1000e6);
-        vm.startPrank(borrower);
+    // ------------------------------------------------------------------ helpers
+    function _openFxrp(address who, uint256 coll) internal returns (uint256 id) {
+        fxrp.mint(who, coll);
+        vm.startPrank(who);
         fxrp.approve(address(book), type(uint256).max);
-        uint256 id = book.open(address(fxrp), 1000e6, 0);
+        id = book.open(address(fxrp), coll, 0);
         vm.stopPrank();
+    }
 
-        assertEq(usdt0.balanceOf(borrower), 1250e6, "principal disbursed");
-        assertEq(pool.principalOut(), 1250e6, "principalOut tracked");
+    function _swapData(uint256 amountIn) internal view returns (bytes memory) {
+        address[] memory path = new address[](2);
+        path[0] = address(fxrp);
+        path[1] = address(usdt0);
+        return abi.encodeCall(MockRouter.swapExactTokensForTokens, (amountIn, 0, path, address(book), block.timestamp));
+    }
 
-        uint256 spBefore = pool.totalAssets();
+    function _principal(uint256 id) internal view returns (uint256 p) {
+        (,,, p,,,,,,,) = book.loans(id);
+    }
 
-        // repay principal + fee
-        usdt0.mint(borrower, 25e6); // borrower tops up to cover fee
+    // ------------------------------------------------------------------ core flows
+    function test_OpenAndRepay_FeeNettedAtOpen() public {
+        uint256 assetsBefore = pool.totalAssets();
+
+        // 1000 FXRP @ $2.50 = $2500, 50% LTV -> principal 1250, 2% fee = 25 netted from disbursement
+        uint256 id = _openFxrp(borrower, 1000e6);
+        assertEq(usdt0.balanceOf(borrower), 1225e6, "borrower receives principal minus fee");
+        assertEq(pool.principalOut(), 1250e6, "full principal owed back");
+        // fee earned instantly: 80% of 25 to lenders, 20% (5) into the first-loss buffer
+        assertEq(book.reserveBalance(), 5e6, "reserve cut buffered");
+        assertEq(usdt0.balanceOf(address(book)), 5e6, "book holds exactly the buffer");
+        assertApproxEqAbs(pool.totalAssets(), assetsBefore + 20e6, 1, "lender yield accrued at open");
+
+        // repay is principal-only now
+        usdt0.mint(borrower, 25e6); // top up the netted fee to cover full principal
         vm.startPrank(borrower);
         usdt0.approve(address(pool), type(uint256).max);
         book.repay(id);
@@ -160,70 +193,215 @@ contract LodestarTest is Test {
 
         assertEq(fxrp.balanceOf(borrower), 1000e6, "collateral returned");
         assertEq(pool.principalOut(), 0, "principal cleared");
-        // lenders earned 80% of the 25 fee = 20 (reserve took 5)
-        assertEq(usdt0.balanceOf(reserve), 5e6, "reserve cut");
-        assertApproxEqAbs(pool.totalAssets(), spBefore + 20e6, 1, "lender yield accrued");
+        assertApproxEqAbs(pool.totalAssets(), assetsBefore + 20e6, 1, "yield preserved through repay");
     }
 
     function test_NoLiquidationOnPriceCrash() public {
-        fxrp.mint(borrower, 1000e6);
-        vm.startPrank(borrower);
-        fxrp.approve(address(book), type(uint256).max);
-        uint256 id = book.open(address(fxrp), 1000e6, 0);
-        vm.stopPrank();
+        uint256 id = _openFxrp(borrower, 1000e6);
 
         // XRP crashes 60% -> collateral now worth $1000 < debt. Traditional lender would liquidate.
         ftso.set(XRP_USD, 100_000_000, 8); // $1.00
 
         // Lodestar: cannot be settled while inside the term, no matter the price.
         vm.expectRevert(LodestarLoanBook.NotYetDefaulted.selector);
-        book.settle(id, 0);
-
-        // still repayable and collateral still the borrower's
-        assertTrue(book.isDefaulted(id) == false, "not defaulted mid-term");
+        book.buyout(id, type(uint256).max);
+        vm.expectRevert(LodestarLoanBook.NotYetDefaulted.selector);
+        book.settleSwap(id, address(router), _swapData(950e6), 0);
+        assertFalse(book.isDefaulted(id), "not defaulted mid-term");
     }
 
-    function test_DefaultSettlement() public {
-        fxrp.mint(borrower, 1000e6);
-        vm.startPrank(borrower);
-        fxrp.approve(address(book), type(uint256).max);
-        uint256 id = book.open(address(fxrp), 1000e6, 0);
-        vm.stopPrank();
+    function test_DefaultSettlementViaSwap() public {
+        uint256 id = _openFxrp(borrower, 1000e6);
+        router.setRate(25, 10); // router pays $2.50 per FXRP, matching FTSO
 
-        // router pays $2.50 per FXRP (num/den on 6dp->6dp): out = amountIn * 25 / 10
-        router.setRate(25, 10);
-
-        // move past deadline (7d) + grace (48h)
         vm.warp(block.timestamp + 7 days + 48 hours + 1);
         assertTrue(book.isDefaulted(id), "defaulted");
 
         uint256 poolBefore = pool.totalAssets();
         vm.prank(keeper);
-        book.settle(id, 0);
+        book.settleSwap(id, address(router), _swapData(950e6), 0);
 
-        // keeper got 5% of 1000 FXRP in-kind
+        // keeper got 5% of 1000 FXRP in-kind ($125 < $500 cap, so uncapped here)
         assertEq(fxrp.balanceOf(keeper), 50e6, "keeper bounty in-kind");
-        // pool made whole on principal (1250) + fee share; principalOut cleared
         assertEq(pool.principalOut(), 0, "principal cleared");
         assertGe(pool.totalAssets(), poolBefore, "lenders made whole");
-        // borrower received surplus (collateral was worth well over the debt)
-        assertGt(usdt0.balanceOf(borrower) - 1250e6, 0, "surplus returned to borrower");
+        // borrower received surplus above principal + penalty
+        assertGt(usdt0.balanceOf(borrower), 1225e6, "surplus returned to borrower");
+    }
+
+    function test_DefaultSettlementViaBuyout() public {
+        uint256 id = _openFxrp(borrower, 1000e6);
+        vm.warp(block.timestamp + 7 days + 48 hours + 1);
+
+        uint256 cost = book.buyoutCost(id); // ~100% of $2500 right after default
+        assertApproxEqRel(cost, 2500e6, 0.01e18, "buyout cost near full FTSO value at default");
+
+        usdt0.mint(buyer, cost);
+        uint256 poolBefore = pool.totalAssets();
+        vm.startPrank(buyer);
+        usdt0.approve(address(book), cost);
+        book.buyout(id, cost);
+        vm.stopPrank();
+
+        assertEq(fxrp.balanceOf(buyer), 1000e6, "buyer received all collateral");
+        assertEq(pool.principalOut(), 0, "principal cleared");
+        assertGe(pool.totalAssets(), poolBefore, "lenders made whole");
+        assertGt(usdt0.balanceOf(borrower), 1225e6, "surplus returned to borrower");
+    }
+
+    function test_DutchFloorDecays() public {
+        uint256 id = _openFxrp(borrower, 1000e6);
+        router.setRate(225, 100); // router pays $2.25 = 90% of FTSO value
+
+        // right after default the floor is ~100%: a 90% fill must fail
+        vm.warp(block.timestamp + 7 days + 48 hours + 1);
+        assertEq(book.currentFloorBps(id), 10_000, "floor starts at 100%");
+        vm.prank(keeper);
+        vm.expectRevert(LodestarLoanBook.BelowFloor.selector);
+        book.settleSwap(id, address(router), _swapData(950e6), 0);
+
+        // after the full decay period the floor is 85%: the same 90% fill clears
+        vm.warp(block.timestamp + 24 hours);
+        assertEq(book.currentFloorBps(id), 8_500, "floor decayed to min");
+        vm.prank(keeper);
+        book.settleSwap(id, address(router), _swapData(950e6), 0);
+        assertEq(pool.principalOut(), 0, "settled at the decayed floor");
+    }
+
+    function test_BuyoutByBorrowerIsAllowed() public {
+        // A borrower buying out their own default is just late repayment at market price.
+        uint256 id = _openFxrp(borrower, 1000e6);
+        vm.warp(block.timestamp + 7 days + 48 hours + 1);
+        uint256 cost = book.buyoutCost(id);
+        usdt0.mint(borrower, cost);
+        vm.startPrank(borrower);
+        usdt0.approve(address(book), cost);
+        book.buyout(id, cost);
+        vm.stopPrank();
+        assertEq(fxrp.balanceOf(borrower), 1000e6, "borrower reclaimed collateral");
+    }
+
+    function test_SelfSettleEarnsNoBounty() public {
+        uint256 id = _openFxrp(borrower, 1000e6);
+        router.setRate(25, 10);
+        vm.warp(block.timestamp + 7 days + 48 hours + 1);
+
+        vm.prank(borrower);
+        book.settleSwap(id, address(router), _swapData(1000e6), 0); // full amount: no bounty carve-out
+        assertEq(fxrp.balanceOf(borrower), 0, "no bounty for settling your own default");
+    }
+
+    function test_KeeperBountyUsdCapped() public {
+        // 100k FXRP @ $2.50 = $250k collateral. 5% = 5000 FXRP ($12.5k) must cap at $500 = 200 FXRP.
+        usdt0.mint(lender, 200_000e6);
+        vm.startPrank(lender);
+        pool.deposit(200_000e6, lender);
+        vm.stopPrank();
+
+        uint256 id = _openFxrp(borrower, 100_000e6);
+        router.setRate(25, 10);
+        vm.warp(block.timestamp + 7 days + 48 hours + 1);
+
+        vm.prank(keeper);
+        book.settleSwap(id, address(router), _swapData(100_000e6 - 200e6), 0);
+        assertEq(fxrp.balanceOf(keeper), 200e6, "bounty capped at $500 of collateral");
+    }
+
+    function test_RolloverRequiresHealth_AddCollateralCures() public {
+        uint256 id = _openFxrp(borrower, 1000e6);
+
+        // price drops 40%: at $1.50 the position no longer qualifies at 50% LTV
+        ftso.set(XRP_USD, 150_000_000, 8);
+        usdt0.mint(borrower, 100e6);
+        vm.startPrank(borrower);
+        usdt0.approve(address(pool), type(uint256).max);
+        vm.expectRevert(LodestarLoanBook.Undercollateralized.selector);
+        book.rollover(id, 0);
+
+        // cure: top up collateral until the tier LTV holds again, then roll
+        fxrp.mint(borrower, 700e6);
+        book.addCollateral(id, 700e6); // 1700 FXRP * $1.50 * 50% = $1275 >= $1250
+        book.rollover(id, 0);
+        vm.stopPrank();
+
+        (,,,,,,, uint64 dueAt,,,) = book.loans(id);
+        assertEq(uint256(dueAt), block.timestamp + 7 days, "extended after cure");
+    }
+
+    function test_RolloverFineWhenHealthy() public {
+        uint256 id = _openFxrp(borrower, 1000e6);
+        usdt0.mint(borrower, 100e6);
+        vm.startPrank(borrower);
+        usdt0.approve(address(pool), type(uint256).max);
+        book.rollover(id, 0);
+        vm.stopPrank();
+        assertEq(book.reserveBalance(), 5e6 + 5e6, "open + rollover reserve cuts buffered");
+    }
+
+    function test_ImpairMarksLossImmediately_RepayReverses() public {
+        uint256 id = _openFxrp(borrower, 1000e6);
+        vm.warp(block.timestamp + 7 days + 48 hours + 1);
+
+        // crash to $0.50: collateral $500 vs principal 1250
+        ftso.set(XRP_USD, 50_000_000, 8);
+        uint256 assetsBefore = pool.totalAssets();
+        book.impair(id);
+        // expected recovery = 500 * 95% = 475; marked loss = 1250 - 475 = 775
+        assertEq(pool.impairedLoss(), 775e6, "expected loss marked");
+        assertEq(pool.totalAssets(), assetsBefore - 775e6, "share price marked down at default");
+
+        // late repay reverses the mark completely
+        usdt0.mint(borrower, 1250e6);
+        vm.startPrank(borrower);
+        usdt0.approve(address(pool), type(uint256).max);
+        book.repay(id);
+        vm.stopPrank();
+        assertEq(pool.impairedLoss(), 0, "mark reversed on repay");
+        assertEq(pool.totalAssets(), assetsBefore, "pool restored");
+    }
+
+    function test_ImpairTruedUpAtSettlement_ReserveCoversFirst() public {
+        // build a reserve buffer with a fee-paying loan first
+        uint256 id0 = _openFxrp(address(0xFEE), 1000e6);
+        usdt0.mint(address(0xFEE), 1250e6);
+        vm.startPrank(address(0xFEE));
+        usdt0.approve(address(pool), type(uint256).max);
+        book.repay(id0);
+        vm.stopPrank();
+        assertEq(book.reserveBalance(), 5e6, "buffer funded");
+
+        uint256 id = _openFxrp(borrower, 1000e6); // second open adds another 5 to the buffer
+        vm.warp(block.timestamp + 7 days + 48 hours + 1);
+        ftso.set(XRP_USD, 50_000_000, 8); // deep crash
+        book.impair(id);
+
+        router.setRate(5, 10); // router pays the crashed $0.50
+        uint256 assetsBefore = pool.totalAssets(); // already marked down by 775
+        vm.prank(keeper);
+        book.settleSwap(id, address(router), _swapData(950e6), 0);
+
+        // proceeds 475 (950 FXRP * $0.50) -> shortfall 775, buffer covers 10, loss realized 765
+        assertEq(pool.impairedLoss(), 0, "impairment cleared at settlement");
+        assertEq(book.reserveBalance(), 0, "buffer used as first loss");
+        // mark estimated 475 recovery; settlement realized 475 + 10 cover: pool lands 10 above
+        // the marked level - no cliff, the markdown already told lenders the truth
+        assertEq(pool.totalAssets(), assetsBefore + 10e6, "no settlement cliff");
+        assertEq(pool.principalOut(), 0);
     }
 
     function test_sFLRYieldStaysWithBorrower() public {
-        // borrower locks 100k sFLR (@ $0.02 = $2000), 60% LTV -> $1200 principal
+        // 100k sFLR (@ $0.02 = $2000), 55% LTV -> principal 1100, 3% fee = 33
         sflr.mint(borrower, 100_000e18);
         vm.startPrank(borrower);
         sflr.approve(address(book), type(uint256).max);
         uint256 id = book.open(address(sflr), 100_000e18, 0);
         vm.stopPrank();
-        assertEq(usdt0.balanceOf(borrower), 1200e6, "principal @60% LTV");
+        assertEq(usdt0.balanceOf(borrower), 1100e6 - 33e6, "principal minus fee @55% LTV");
 
         // while locked, sFLR appreciates 10% vs FLR (staking yield)
         sflrRate.set(1.1e18);
 
-        // repay: borrower gets back the SAME 100k sFLR — now worth 10% more. Yield kept.
-        usdt0.mint(borrower, 36e6); // 3% fee
+        usdt0.mint(borrower, 33e6);
         vm.startPrank(borrower);
         usdt0.approve(address(pool), type(uint256).max);
         book.repay(id);
@@ -232,33 +410,29 @@ contract LodestarTest is Test {
     }
 
     function test_YieldSkimRoutesAppreciationToReserve() public {
-        book.setYieldSkimBps(5000); // route 50% of collateral appreciation to the reserve
+        book.setYieldSkimBps(5000);
         sflr.mint(borrower, 100_000e18);
         vm.startPrank(borrower);
         sflr.approve(address(book), type(uint256).max);
         uint256 id = book.open(address(sflr), 100_000e18, 0);
         vm.stopPrank();
 
-        sflrRate.set(1.1e18); // sFLR appreciates 10% during the loan
+        sflrRate.set(1.1e18);
 
-        usdt0.mint(borrower, 36e6); // cover the 3% fee
+        usdt0.mint(borrower, 40e6);
         vm.startPrank(borrower);
         usdt0.approve(address(pool), type(uint256).max);
         book.repay(id);
         vm.stopPrank();
 
-        uint256 coll = 100_000e18;
-        uint256 openR = 1e18;
-        uint256 nowR = 1.1e18;
-        uint256 gain = (coll * (nowR - openR)) / nowR; // tokens equal to the appreciation
-        uint256 expectedSkim = (gain * 5000) / 10_000; // 50% of it
+        uint256 gain = (100_000e18 * (1.1e18 - 1e18)) / uint256(1.1e18);
+        uint256 expectedSkim = (gain * 5000) / 10_000;
         assertEq(sflr.balanceOf(reserve), expectedSkim, "wrong skim to reserve");
         assertEq(sflr.balanceOf(borrower) + expectedSkim, 100_000e18, "collateral tokens not conserved");
-        assertGt(expectedSkim, 0, "nothing skimmed");
     }
 
+    // ------------------------------------------------------------------ guards
     function test_RejectsDustLoan() public {
-        // a tiny sFLR amount values to < 1 stable unit of principal -> must revert, not create dust
         sflr.mint(borrower, 1e9);
         vm.startPrank(borrower);
         sflr.approve(address(book), type(uint256).max);
@@ -267,19 +441,84 @@ contract LodestarTest is Test {
         vm.stopPrank();
     }
 
-    function test_SettleFloorEnforced() public {
-        fxrp.mint(borrower, 1000e6);
+    function test_MinPrincipalEnforced() public {
+        // default minPrincipal = 10 USDT0; 15 FXRP @ $2.50 * 50% = $18.75 passes, 7 FXRP = $8.75 fails
+        fxrp.mint(borrower, 22e6);
         vm.startPrank(borrower);
         fxrp.approve(address(book), type(uint256).max);
-        uint256 id = book.open(address(fxrp), 1000e6, 0);
+        vm.expectRevert(LodestarLoanBook.BadParam.selector);
+        book.open(address(fxrp), 7e6, 0);
+        book.open(address(fxrp), 15e6, 0); // fine
+        vm.stopPrank();
+    }
+
+    function test_RouterMustBeWhitelisted() public {
+        uint256 id = _openFxrp(borrower, 1000e6);
+        vm.warp(block.timestamp + 7 days + 48 hours + 1);
+        MockRouter rogue = new MockRouter();
+        usdt0.mint(address(rogue), 10_000e6);
+        vm.prank(keeper);
+        vm.expectRevert(LodestarLoanBook.RouterNotAllowed.selector);
+        book.settleSwap(id, address(rogue), _swapData(950e6), 0);
+    }
+
+    function test_SwapMustTakeExactSaleAmount() public {
+        uint256 id = _openFxrp(borrower, 1000e6);
+        vm.warp(block.timestamp + 7 days + 48 hours + 1);
+        SkimmingRouter skim = new SkimmingRouter();
+        usdt0.mint(address(skim), 10_000e6);
+        book.setRouterAllowed(address(skim), true);
+        vm.prank(keeper);
+        vm.expectRevert(LodestarLoanBook.SwapIncomplete.selector);
+        book.settleSwap(id, address(skim), _swapData(950e6), 0);
+    }
+
+    function test_OracleDownUsesCachedPriceFloor() public {
+        uint256 id = _openFxrp(borrower, 1000e6); // caches $2.50
+        vm.warp(block.timestamp + 7 days + 48 hours + 1);
+        ftso.set(XRP_USD, 0, 8); // FTSO down (BadPrice revert)
+
+        // inside the fallback delay: settlement waits
+        vm.prank(keeper);
+        vm.expectRevert(LodestarLoanBook.OracleDown.selector);
+        book.settleSwap(id, address(router), _swapData(950e6), 0);
+
+        // past the delay the cached $2.50 anchors the floor: a lowball fill still fails
+        vm.warp(block.timestamp + 6 days); // now ~8d past due > 7d fallback delay
+        router.setRate(10, 10); // $1.00 = 40% of cached value, way under the decayed floor
+        vm.prank(keeper);
+        vm.expectRevert(LodestarLoanBook.BelowFloor.selector);
+        book.settleSwap(id, address(router), _swapData(950e6), 0);
+
+        // a fill near the cached price clears
+        router.setRate(25, 10);
+        vm.prank(keeper);
+        book.settleSwap(id, address(router), _swapData(950e6), 0);
+        assertEq(pool.principalOut(), 0, "settled on cached-price floor");
+    }
+
+    function test_TierAndKeeperBoundsTightened() public {
+        vm.expectRevert(LodestarLoanBook.BadParam.selector);
+        book.addTier(address(fxrp), 7500, 7 days, 200); // >70% LTV forbidden
+        vm.expectRevert(LodestarLoanBook.BadParam.selector);
+        book.setRiskParams(48 hours, 1100, 500, 2000); // keeper >10% forbidden
+        vm.expectRevert(LodestarOracle.BadParam.selector);
+        oracle.setFeed(address(fxrp), XRP_USD, address(0), 0); // staleness bound mandatory
+    }
+
+    function test_WithdrawReserve() public {
+        uint256 id = _openFxrp(borrower, 1000e6);
+        usdt0.mint(borrower, 1250e6);
+        vm.startPrank(borrower);
+        usdt0.approve(address(pool), type(uint256).max);
+        book.repay(id);
         vm.stopPrank();
 
-        // router would only return ~$1900 for collateral FTSO-valued at ~$2375 -> below the 98% floor
-        router.setRate(20, 10);
-        vm.warp(block.timestamp + 7 days + 48 hours + 1);
-
-        vm.prank(keeper);
-        vm.expectRevert(bytes("MockRouter: slippage"));
-        book.settle(id, 0); // keeper cannot route value away below the FTSO floor
+        book.withdrawReserve(5e6);
+        assertEq(usdt0.balanceOf(reserve), 5e6, "revenue withdrawn to reserve");
+        assertEq(book.reserveBalance(), 0);
+        vm.prank(borrower);
+        vm.expectRevert();
+        book.withdrawReserve(1); // only owner
     }
 }

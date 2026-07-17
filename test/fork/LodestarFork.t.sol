@@ -10,6 +10,22 @@ import {LodestarLoanBook} from "../../src/LodestarLoanBook.sol";
 import {SceptreRateAdapter} from "../../src/flare/SceptreRateAdapter.sol";
 import {FlareAddresses as FA} from "../../src/flare/FlareAddresses.sol";
 
+/// @dev SparkDEX V3.1 (UniswapV3-fork) periphery, verified on Flare mainnet.
+interface ISwapRouterV3 {
+    struct ExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;
+        address recipient;
+        uint256 deadline;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+        uint160 sqrtPriceLimitX96;
+    }
+
+    function exactInputSingle(ExactInputSingleParams calldata params) external payable returns (uint256 amountOut);
+}
+
 /// @notice Live-Flare fork tests. Run with a Flare RPC:
 ///   forge test --match-path test/fork/LodestarFork.t.sol --fork-url https://flare-api.flare.network/ext/C/rpc -vv
 /// setUp also self-forks so it runs without the flag.
@@ -77,5 +93,95 @@ contract LodestarForkTest is Test {
         emit log_named_uint("loanId", id);
         emit log_named_decimal_uint("principal disbursed", principal, IERC20Metadata(FA.USDT0).decimals());
         assertGt(principal, 200 * sUnit); // >= ~$200 against 1000 FXRP at 50% LTV
+    }
+
+    // ------------------------------------------------------------- v1.3 mainnet-state lifecycle
+    // These two tests answer "does this truly work on mainnet": full open -> default -> settle
+    // against real FXRP, the real FTSO, real USDT0 holders, and (for the swap path) the REAL
+    // SparkDEX V3.1 router and its live FXRP/USDT0 0.05% pool. No mocks anywhere.
+
+    address constant SPARKDEX_V31_ROUTER = 0x8a1E35F5c98C4E85B36B7B253222eE17773b2781;
+
+    /// @dev Short-lived tier + fast Dutch decay so the whole lifecycle stays inside the FTSO
+    ///      staleness window while warping (fork timestamps don't refresh the real feed).
+    function _prepShortLoan() internal returns (uint256 id, uint256 principal) {
+        book.addTier(FA.FXRP, 5000, 1 hours, 200);
+        uint256 shortTier = book.tierCount(FA.FXRP) - 1;
+        book.setRiskParams(1 hours, 500, 500, 2000); // 1h grace
+        book.setSettleCurve(10_000, 8_500, 1 hours); // full decay in 1h
+
+        uint256 sUnit = 10 ** IERC20Metadata(FA.USDT0).decimals();
+        _fund(FA.USDT0, USDT0_WHALE, lender, 100_000 * sUnit);
+        vm.startPrank(lender);
+        IERC20(FA.USDT0).approve(address(pool), type(uint256).max);
+        pool.deposit(100_000 * sUnit, lender);
+        vm.stopPrank();
+
+        uint256 xUnit = 10 ** IERC20Metadata(FA.FXRP).decimals();
+        _fund(FA.FXRP, FXRP_WHALE, borrower, 1000 * xUnit);
+        vm.startPrank(borrower);
+        IERC20(FA.FXRP).approve(address(book), type(uint256).max);
+        id = book.open(FA.FXRP, 1000 * xUnit, shortTier);
+        vm.stopPrank();
+        (,,, principal,,,,,,,) = book.loans(id);
+    }
+
+    function test_fork_FullLifecycle_BuyoutOnMainnetState() public {
+        (uint256 id,) = _prepShortLoan();
+        address buyer = address(0xB1D);
+
+        vm.warp(block.timestamp + 2 hours + 30 minutes); // past due (1h) + grace (1h), mid-decay
+        assertTrue(book.isDefaulted(id), "defaulted");
+
+        uint256 cost = book.buyoutCost(id);
+        _fund(FA.USDT0, USDT0_WHALE, buyer, cost);
+        uint256 poolBefore = pool.totalAssets();
+        vm.startPrank(buyer);
+        IERC20(FA.USDT0).approve(address(book), cost);
+        book.buyout(id, cost);
+        vm.stopPrank();
+
+        assertEq(IERC20(FA.FXRP).balanceOf(buyer), 1000e6, "buyer received real FXRP");
+        assertEq(pool.principalOut(), 0, "principal cleared");
+        assertGe(pool.totalAssets(), poolBefore, "lenders whole on mainnet state");
+        emit log_named_decimal_uint("buyout cost USDT0", cost, 6);
+    }
+
+    function test_fork_SettleSwapThroughRealSparkDEX() public {
+        (uint256 id, uint256 principal) = _prepShortLoan();
+        book.setRouterAllowed(SPARKDEX_V31_ROUTER, true);
+
+        vm.warp(block.timestamp + 3 hours + 1); // due 1h + grace 1h + full 1h decay -> 85% floor
+        assertEq(book.currentFloorBps(id), 8_500, "floor fully decayed");
+
+        // keeper sells collateral minus the 5% bounty through the LIVE SparkDEX V3.1 pool
+        uint256 toSell = 1000e6 - 50e6;
+        bytes memory swapData = abi.encodeCall(
+            ISwapRouterV3.exactInputSingle,
+            (
+                ISwapRouterV3.ExactInputSingleParams({
+                    tokenIn: FA.FXRP,
+                    tokenOut: FA.USDT0,
+                    fee: 500,
+                    recipient: address(book),
+                    deadline: block.timestamp,
+                    amountIn: toSell,
+                    amountOutMinimum: 0,
+                    sqrtPriceLimitX96: 0
+                })
+            )
+        );
+
+        address keeper = address(0xC0FFEE);
+        uint256 poolBefore = pool.totalAssets();
+        vm.prank(keeper);
+        book.settleSwap(id, SPARKDEX_V31_ROUTER, swapData, 0);
+
+        assertEq(IERC20(FA.FXRP).balanceOf(keeper), 50e6, "keeper bounty in-kind");
+        assertEq(pool.principalOut(), 0, "principal cleared via real DEX settlement");
+        assertGe(pool.totalAssets(), poolBefore, "lenders whole through the real pool");
+        (,,,,,,,, bool active,,) = book.loans(id);
+        assertFalse(active, "loan closed");
+        emit log_named_decimal_uint("principal repaid via SparkDEX", principal, 6);
     }
 }

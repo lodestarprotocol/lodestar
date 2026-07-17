@@ -19,6 +19,7 @@ contract LodestarPool is ERC4626, Ownable {
 
     address public loanBook;
     uint256 public principalOut; // stable lent out and owed back to the pool
+    uint256 public impairedLoss; // expected-loss markdown on defaulted-but-unsettled loans
     uint16 public maxUtilizationBps = 8000; // 80% utilization ceiling
 
     event LoanBookSet(address loanBook);
@@ -49,27 +50,41 @@ contract LodestarPool is ERC4626, Ownable {
         emit MaxUtilizationSet(bps);
     }
 
-    /// @dev Total assets = idle balance + principal currently lent out.
+    /// @dev Total assets = idle balance + principal currently lent out, less the expected-loss
+    ///      markdown on defaulted loans awaiting settlement. Marking losses at default time
+    ///      (not settlement time) removes the informed-lender exit window.
     function totalAssets() public view override returns (uint256) {
-        return IERC20(asset()).balanceOf(address(this)) + principalOut;
+        return IERC20(asset()).balanceOf(address(this)) + principalOut - impairedLoss;
     }
 
     function available() public view returns (uint256) {
         return IERC20(asset()).balanceOf(address(this));
     }
 
-    /// @notice Fund a loan. Increases principalOut so share price is unchanged at disbursal.
-    function disburse(address to, uint256 amount) external onlyLoanBook {
-        if (amount > available()) revert InsufficientLiquidity();
+    /// @notice Fund a loan: `net` stable leaves (principal less the origination fee), the full
+    ///         `principal` is owed back. The fee difference stays in the pool as instant yield.
+    function disburse(address to, uint256 net, uint256 principal) external onlyLoanBook {
+        if (net > principal) revert BadParam();
+        if (net > available()) revert InsufficientLiquidity();
         uint256 ta = totalAssets();
-        if ((principalOut + amount) * 10_000 > ta * maxUtilizationBps) revert OverUtilized();
-        principalOut += amount;
-        IERC20(asset()).safeTransfer(to, amount);
+        if ((principalOut + principal) * 10_000 > ta * maxUtilizationBps) revert OverUtilized();
+        principalOut += principal;
+        IERC20(asset()).safeTransfer(to, net);
     }
 
     /// @notice Account that `principal` has come back (or been written off) against the pool.
     function onPrincipalReturned(uint256 principal) external onlyLoanBook {
         principalOut -= principal;
+    }
+
+    /// @notice Mark expected loss on a defaulted loan into the share price immediately.
+    function impair(uint256 amount) external onlyLoanBook {
+        impairedLoss += amount;
+    }
+
+    /// @notice Reverse a previous markdown (loan repaid late, price recovered, or settlement true-up).
+    function unimpair(uint256 amount) external onlyLoanBook {
+        impairedLoss -= amount; // reverts on underflow: the book never over-reverses
     }
 
     /// @notice Pull `amount` of stable from `from` into the pool (repayment path).

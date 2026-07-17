@@ -27,12 +27,17 @@ contract LodestarOracle is Ownable {
     error FeedNotSet();
     error StalePrice();
     error BadPrice();
+    error BadParam();
 
     constructor(address _ftso, address _owner) Ownable(_owner) {
         ftso = IFtsoV2(_ftso);
     }
 
     function setFeed(address token, bytes21 feedId, address rateProvider, uint64 maxStale) external onlyOwner {
+        // A staleness bound is mandatory: borrowing against a stale-high price is the one
+        // oracle attack a lagged-but-live feed permits. FTSO updates every ~90s; 1 day is
+        // already generous headroom for any legitimate configuration.
+        if (maxStale == 0 || maxStale > 1 days) revert BadParam();
         feeds[token] = Feed(feedId, rateProvider, IERC20Metadata(token).decimals(), maxStale, true);
         emit FeedSet(token, feedId, rateProvider, maxStale);
     }

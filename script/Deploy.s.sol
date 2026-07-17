@@ -6,10 +6,8 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {LodestarOracle} from "../src/LodestarOracle.sol";
 import {LodestarPool} from "../src/LodestarPool.sol";
 import {LodestarLoanBook} from "../src/LodestarLoanBook.sol";
-import {IDexRouter} from "../src/interfaces/IDexRouter.sol";
-import {MockRouter} from "./mocks/MockRouter.sol";
 
-/// @notice Deploys Lodestar to Coston2 (chainId 114) against real test FXRP + USD₮0 and the live FTSOv2.
+/// @notice Deploys Lodestar v1.3 to Coston2 (chainId 114) against real test FXRP + USD₮0 and the live FTSOv2.
 ///   forge script script/Deploy.s.sol:Deploy --rpc-url $COSTON2_RPC --account lodestar-deployer \
 ///     --sender $DEPLOYER --password <pw> --broadcast
 contract Deploy is Script {
@@ -30,8 +28,10 @@ contract Deploy is Script {
         LodestarLoanBook book = new LodestarLoanBook(pool, oracle, deployer, deployer);
         pool.setLoanBook(address(book));
 
-        MockRouter router = new MockRouter();
-        book.setRouter(IDexRouter(address(router)));
+        // Testnet: faucet dispenses 10 FXRP (~$11), so allow small loans. Mainnet keeps 10+.
+        book.setMinPrincipal(1e6);
+        // No DEX with FTestXRP liquidity exists on Coston2: buyout is the settlement path,
+        // so no router is whitelisted here. Mainnet will whitelist SparkDEX V4 / V3.1 / Enosys.
 
         // FXRP tiers: 50% LTV / 7d / 2% fee, and 45% / 30d / 3.5%
         book.addTier(FXRP, 5000, 7 days, 200);
@@ -47,11 +47,10 @@ contract Deploy is Script {
 
         vm.stopBroadcast();
 
-        console.log("=== Lodestar deployed to Coston2 (114) ===");
+        console.log("=== Lodestar v1.3 deployed to Coston2 (114) ===");
         console.log("LodestarOracle  ", address(oracle));
         console.log("LodestarPool    ", address(pool));
         console.log("LodestarLoanBook", address(book));
-        console.log("MockRouter      ", address(router));
         console.log("Pool seeded USDT0", bal);
     }
 }
