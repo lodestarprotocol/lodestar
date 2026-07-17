@@ -181,6 +181,15 @@ td:first-child{text-align:left}
 .why > div:last-child{border-right:none}
 .why b{font-weight:650;font-size:13.5px}
 .why p{margin-top:7px;font-size:12.5px;color:var(--muted);line-height:1.55}
+.faq details{border-bottom:1px solid var(--line)}
+.faq details:last-child{border-bottom:none}
+.faq summary{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:15px 22px;cursor:pointer;font-weight:650;font-size:13.5px;list-style:none}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary:hover{background:var(--hover)}
+.faq summary:after{content:"+";color:var(--faint);font-size:17px;font-weight:400;flex:none;transition:transform .18s ease}
+.faq details[open] summary:after{transform:rotate(45deg);color:var(--red)}
+.faq .a{padding:0 22px 17px;font-size:12.5px;color:var(--muted);line-height:1.62;max-width:730px}
+.faq .a b{color:var(--ink2);font-weight:600}
 .foot{margin-top:24px;color:var(--faint);font-size:11.5px;line-height:1.9}
 .foot .mono{background:var(--card);border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:11px;color:var(--muted)}
 /* wallet modal */
@@ -261,6 +270,7 @@ td:first-child{text-align:left}
       <a class="nav-item" data-view="portfolio" href="#portfolio"><svg viewBox="0 0 24 24"><path d="M3.5 7l8.5-3.8L20.5 7 12 10.8 3.5 7zM3.5 12l8.5 3.8L20.5 12M3.5 16.5l8.5 3.8 8.5-3.8"/></svg> Portfolio</a>
       <div class="sb-sec lbl">Learn</div>
       <a class="nav-item" data-view="why" href="#why"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 16.5v-5M12 8h.01"/></svg> Why no-liquidation</a>
+      <a class="nav-item" data-view="faq" href="#faq"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.3a2.5 2.5 0 1 1 3.5 2.3c-.75.32-1.1.85-1.1 1.6v.3M12 16.6h.01"/></svg> FAQ</a>
       <a class="nav-item" href="https://github.com/lodestarprotocol/lodestar" target="_blank" rel="noopener"><svg viewBox="0 0 24 24"><path d="M5 4h9l5 5v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/><path d="M14 4v5h5"/></svg> Documentation</a>
       <a class="nav-item" href="https://faucet.flare.network/coston2" target="_blank" rel="noopener"><svg viewBox="0 0 24 24"><path d="M12 3.5s6 6.6 6 10.5a6 6 0 0 1-12 0c0-3.9 6-10.5 6-10.5z"/></svg> Get test tokens</a>
     </nav>
@@ -419,6 +429,45 @@ td:first-child{text-align:left}
         </div>
       </section>
 
+      <!-- ===================== FAQ ===================== -->
+      <section class="view" id="view-faq">
+        <div class="sec-h first"><h2>Frequently asked questions</h2><span>the honest answers</span></div>
+        <div class="card faq">
+          <details open>
+            <summary>How is creditworthiness handled?</summary>
+            <div class="a">Lodestar doesn't underwrite borrowers. It underwrites collateral and time. There is no credit score because there is no unsecured credit: every loan is overcollateralized at roughly 2x when it opens (50% LTV on 7-day terms, 45% on 30-day terms). A borrower who walks away forfeits the half of their collateral value sitting above the debt, plus a 5% penalty, so repaying is always the rational move. <b>We replaced creditworthiness with collateral-worthiness plus a deadline: the protocol underwrites the asset and the clock, not the person.</b></div>
+          </details>
+          <details>
+            <summary>What happens if the price crashes during my loan?</summary>
+            <div class="a">Nothing. That is the point. There is no health factor, no margin call, and no liquidation bot watching your position. Your collateral stays locked and untouched until your deadline, however violently the price moves in between. The risk question changes from "did the price wick below a line for one block" to "can this asset lose more than half its value and stay there for the whole term". LTVs and term lengths are calibrated together so that lenders stay covered even through severe drawdowns.</div>
+          </details>
+          <details>
+            <summary>What happens if I miss my deadline?</summary>
+            <div class="a">You get a 48-hour grace period first. After that, anyone can settle the loan: your collateral is sold behind a hard on-chain floor of 98% of the FTSO price, so nobody can dump it cheap. Lenders are repaid first, a 5% penalty goes to the protocol reserve, and <b>everything left over comes back to you</b>, including any staking yield the collateral earned. Defaulting costs you the fee and the penalty, not your whole position.</div>
+          </details>
+          <details>
+            <summary>What protects lenders?</summary>
+            <div class="a">Four layers. First claim on settlement proceeds: principal is paid before anything else. Conservative sizing: collateral is worth about twice the debt at open, and terms are capped at 90 days so exposure is always a bounded window. Concentration limits: each collateral asset has its own exposure cap. And a growing reserve: 20% of every fee plus all default penalties accumulate as a first-loss buffer. The residual risk, stated honestly: lenders only take a loss if the collateral falls more than roughly half within a single term <b>and</b> the borrower abandons the position. That tail is what the fees price.</div>
+          </details>
+          <details>
+            <summary>Where do prices come from?</summary>
+            <div class="a">Flare's enshrined FTSOv2 oracle, the same decentralized feed that the network itself stands behind. Not a DEX spot price that a flash loan can bend for one block. The oracle prices collateral at loan open and anchors the settlement floor on default. If the oracle ever goes down, settlement simply waits: a defaulted loan can only bypass the floor after 7 full days past due, so an outage can never be used to underprice a sale.</div>
+          </details>
+          <details>
+            <summary>What does a loan cost?</summary>
+            <div class="a">One flat fee, paid at repay: 2% of principal for a 7-day term, 3.5% for 30 days. No accruing interest, no variable rate that spikes while you sleep, no funding payments. You know the full cost of the loan before you open it.</div>
+          </details>
+          <details>
+            <summary>Can I extend my loan?</summary>
+            <div class="a">Yes. Any time before your deadline you can roll the loan over by paying another tier fee, which pushes the deadline out by that tier's duration. Total loan life is capped at 90 days from open.</div>
+          </details>
+          <details>
+            <summary>Is there a protocol token?</summary>
+            <div class="a">No, and there never will be. Lodestar is fee-only: lenders earn real fees paid by real borrowers in USD₮0. Nothing to farm, nothing to dump, no emissions schedule subsidizing an APY that disappears.</div>
+          </details>
+        </div>
+      </section>
+
       <div class="foot">
         <b style="color:var(--ink2)">Lodestar</b>, no-liquidation fixed-term lending, live on <b style="color:var(--ink2)">Coston2 testnet</b>.
         LoanBook <span class="mono">0x2823…045f</span> · Pool <span class="mono">0x1D76…4526</span> · Oracle <span class="mono">0xB36f…E432</span> ·
@@ -459,8 +508,8 @@ window.toggleMenu=()=>{document.querySelector(".sidebar").classList.toggle("open
 window.fillAmt=(inp,tok,frac)=>{const v=Number(BAL[tok]||0n)/1e6*frac;$(inp).value=v>0?Math.floor(v*1e6)/1e6:0;preview();};
 
 /* ---- router ---- */
-const VIEWS=["dashboard","borrow","lend","portfolio","why"];
-const TITLES={dashboard:["Dashboard","Protocol overview"],borrow:["Borrow","Borrow against your assets"],lend:["Lend","Supply USD₮0, earn fees"],portfolio:["Portfolio","Your positions"],why:["Why no-liquidation","The model, in three ideas"]};
+const VIEWS=["dashboard","borrow","lend","portfolio","why","faq"];
+const TITLES={dashboard:["Dashboard","Protocol overview"],borrow:["Borrow","Borrow against your assets"],lend:["Lend","Supply USD₮0, earn fees"],portfolio:["Portfolio","Your positions"],why:["Why no-liquidation","The model, in three ideas"],faq:["FAQ","Frequently asked questions"]};
 function route(){let h=(location.hash||"#dashboard").replace("#","");if(!VIEWS.includes(h))h="dashboard";
   document.querySelectorAll(".view").forEach(v=>v.classList.toggle("active",v.id==="view-"+h));
   document.querySelectorAll(".nav-item").forEach(n=>n.classList.toggle("on",n.dataset.view===h));
