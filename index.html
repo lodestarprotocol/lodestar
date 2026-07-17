@@ -339,7 +339,7 @@ td:first-child{text-align:left}
               <div class="fld"><label>Term</label><div class="terms" id="terms"></div></div>
               <div class="preview">
                 <div class="prow hero"><span class="l">You receive</span><span class="r" id="q-recv">…</span></div>
-                <div class="prow"><span class="l">One-time fee</span><span class="r" id="q-fee">…</span></div>
+                <div class="prow"><span class="l">One-time fee, deducted upfront</span><span class="r" id="q-fee">…</span></div>
                 <div class="prow"><span class="l">Repay by deadline</span><span class="r" id="q-repay">…</span></div>
                 <div class="prow"><span class="l">Due date</span><span class="r" id="q-due">…</span></div>
                 <div class="badge">Liquidation price&nbsp; <b>None</b>, the deadline is the only trigger.</div>
@@ -355,7 +355,7 @@ td:first-child{text-align:left}
               <div class="prow"><span class="l">Max LTV</span><span class="r" id="b-ltv">…</span></div>
               <div class="prow"><span class="l">Fee from</span><span class="r" id="b-fee">…</span></div>
               <div class="prow"><span class="l">Grace period</span><span class="r">48h</span></div>
-              <div class="prow"><span class="l">Settlement floor</span><span class="r">98% FTSO</span></div>
+              <div class="prow"><span class="l">Settlement floor</span><span class="r">100→85% FTSO over 24h</span></div>
             </div>
             <div class="sec-h" style="margin-top:18px"><h2>Your loans</h2></div>
             <div id="myloans"><div class="empty" style="padding:30px"><b>No open loans</b>Lock collateral above to borrow.</div></div>
@@ -417,15 +417,15 @@ td:first-child{text-align:left}
         <div class="sec-h first"><h2>Why no-liquidation wins</h2><span>the model, in three ideas</span></div>
         <div class="card"><div class="why">
           <div><b>Only the calendar defaults you</b><p>No health factor, no margin calls. XRP can wick 60% at 3am and recover by breakfast. Your collateral stays untouched. Miss your deadline and you still get the surplus back.</p></div>
-          <div><b>FTSOv2 native oracle</b><p>Prices come from Flare's enshrined oracle, the same feed that secures the chain, not a flash-loanable DEX spot. Settlement is floored at 98% of the FTSO price so a keeper can't route value away.</p></div>
+          <div><b>FTSOv2 native oracle</b><p>Prices come from Flare's enshrined oracle, the same feed that secures the chain, not a flash-loanable DEX spot. Defaults settle behind a descending FTSO-anchored price floor, so nobody can dump your collateral cheap.</p></div>
           <div><b>Collateral keeps earning</b><p>Locked sFLR and stXRP keep earning their staking yield for the full term. That appreciation comes back to you on repay. Dead-weight collateral is a thing of the past.</p></div>
         </div></div>
         <div class="card pad" style="margin-top:16px">
           <div class="lbl">How a loan works</div>
           <div class="prow mt" style="padding-top:2px"><span class="l">1 · Lock</span><span class="r" style="font-family:Inter;font-weight:500;color:var(--ink2)">Deposit FXRP / stXRP / sFLR as collateral</span></div>
-          <div class="prow"><span class="l">2 · Borrow</span><span class="r" style="font-family:Inter;font-weight:500;color:var(--ink2)">Receive USD₮0 up to the tier LTV, pay a one-time fee</span></div>
+          <div class="prow"><span class="l">2 · Borrow</span><span class="r" style="font-family:Inter;font-weight:500;color:var(--ink2)">Receive USD₮0 up to the tier LTV, the one-time fee is simply deducted upfront</span></div>
           <div class="prow"><span class="l">3 · Repay by the deadline</span><span class="r" style="font-family:Inter;font-weight:500;color:var(--ink2)">Get your collateral back, plus any yield it earned</span></div>
-          <div class="prow"><span class="l">If you miss it</span><span class="r" style="font-family:Inter;font-weight:500;color:var(--ink2)">After a 48h grace, a keeper settles; lenders first, surplus to you</span></div>
+          <div class="prow"><span class="l">If you miss it</span><span class="r" style="font-family:Inter;font-weight:500;color:var(--ink2)">After a 48h grace, anyone can settle at a fair floor price; lenders first, surplus to you</span></div>
         </div>
       </section>
 
@@ -443,23 +443,23 @@ td:first-child{text-align:left}
           </details>
           <details>
             <summary>What happens if I miss my deadline?</summary>
-            <div class="a">You get a 48-hour grace period first. After that, anyone can settle the loan: your collateral is sold behind a hard on-chain floor of 98% of the FTSO price, so nobody can dump it cheap. Lenders are repaid first, a 5% penalty goes to the protocol reserve, and <b>everything left over comes back to you</b>, including any staking yield the collateral earned. Defaulting costs you the fee and the penalty, not your whole position.</div>
+            <div class="a">You get a 48-hour grace period first. After that, anyone can settle the loan by paying its floor price: an on-chain price floor that starts at 100% of the FTSO oracle value and eases to 85% over 24 hours, so nobody can ever dump your collateral cheap. Lenders are repaid first, a 5% penalty goes to the protocol reserve, and <b>everything left over comes back to you</b>. You can even settle it yourself and reclaim the collateral at that same price. Defaulting costs you the penalty, not your whole position.</div>
           </details>
           <details>
             <summary>What protects lenders?</summary>
-            <div class="a">Four layers. First claim on settlement proceeds: principal is paid before anything else. Conservative sizing: collateral is worth about twice the debt at open, and terms are capped at 90 days so exposure is always a bounded window. Concentration limits: each collateral asset has its own exposure cap. And a growing reserve: 20% of every fee plus all default penalties accumulate as a first-loss buffer. The residual risk, stated honestly: lenders only take a loss if the collateral falls more than roughly half within a single term <b>and</b> the borrower abandons the position. That tail is what the fees price.</div>
+            <div class="a">Five layers. First claim on settlement proceeds: principal is paid before anything else. Conservative sizing: collateral is worth about twice the debt at open, terms are capped at 90 days, and a loan can only be extended while it still meets its LTV at current prices. Concentration limits: each collateral asset has its own exposure cap. A real first-loss buffer: 20% of every fee plus all default penalties accumulate on-chain and automatically cover lender shortfalls before anyone else is paid. And honest accounting: the moment a loan defaults, its expected loss is marked into the pool price, so no lender can quietly exit ahead of bad news. The residual risk, stated honestly: lenders only take a loss if the collateral falls more than roughly half within a single term <b>and</b> the borrower abandons the position. That tail is what the fees price.</div>
           </details>
           <details>
             <summary>Where do prices come from?</summary>
-            <div class="a">Flare's enshrined FTSOv2 oracle, the same decentralized feed that the network itself stands behind. Not a DEX spot price that a flash loan can bend for one block. The oracle prices collateral at loan open and anchors the settlement floor on default. If the oracle ever goes down, settlement simply waits: a defaulted loan can only bypass the floor after 7 full days past due, so an outage can never be used to underprice a sale.</div>
+            <div class="a">Flare's enshrined FTSOv2 oracle, the same decentralized feed that the network itself stands behind. Not a DEX spot price that a flash loan can bend for one block. The oracle prices collateral at loan open and anchors the settlement floor on default. If the oracle ever goes down, settlement waits 7 days and then falls back to the last recorded price, so an outage can never be used to underprice a sale.</div>
           </details>
           <details>
             <summary>What does a loan cost?</summary>
-            <div class="a">One flat fee, paid at repay: 2% of principal for a 7-day term, 3.5% for 30 days. No accruing interest, no variable rate that spikes while you sleep, no funding payments. You know the full cost of the loan before you open it.</div>
+            <div class="a">One flat fee, deducted from the amount you receive: borrow at 2% for a 7-day term or 3.5% for 30 days, and repayment is exactly the principal, nothing more. No accruing interest, no variable rate that spikes while you sleep, no funding payments. You know the full cost of the loan before you open it.</div>
           </details>
           <details>
             <summary>Can I extend my loan?</summary>
-            <div class="a">Yes. Any time before your deadline you can roll the loan over by paying another tier fee, which pushes the deadline out by that tier's duration. Total loan life is capped at 90 days from open.</div>
+            <div class="a">Yes. Any time before your deadline you can roll the loan over by paying another tier fee, which pushes the deadline out by that tier's duration. The position has to still meet its LTV at current prices to extend (top up collateral if it fell), and total loan life is capped at 90 days from open.</div>
           </details>
           <details>
             <summary>Is there a protocol token?</summary>
@@ -470,8 +470,8 @@ td:first-child{text-align:left}
 
       <div class="foot">
         <b style="color:var(--ink2)">Lodestar</b>, no-liquidation fixed-term lending, live on <b style="color:var(--ink2)">Coston2 testnet</b>.
-        LoanBook <span class="mono">0x2823…045f</span> · Pool <span class="mono">0x1D76…4526</span> · Oracle <span class="mono">0xB36f…E432</span> ·
-        <a href="https://coston2-explorer.flare.network/address/0x28238E7f47802c991fC950b01262Dc2ba0c9045f" target="_blank" rel="noopener" style="color:var(--red);font-weight:600">explorer ↗</a>
+        LoanBook <span class="mono">0xFF0b…9e4B</span> · Pool <span class="mono">0x4f7e…2395</span> · Oracle <span class="mono">0xF3F1…d426</span> ·
+        <a href="https://coston2-explorer.flare.network/address/0xFF0b265eA737Bd5a5698393273d2080318359e4B" target="_blank" rel="noopener" style="color:var(--red);font-weight:600">explorer ↗</a>
       </div>
     </div>
   </div>
@@ -482,21 +482,21 @@ td:first-child{text-align:left}
 const RPC="https://coston2-api.flare.network/ext/C/rpc";
 const CHAIN_HEX="0x72", CHAIN_NAME="Flare Testnet Coston2";
 const FTSO="0xC4e9c78EA53db782E28f28Fdf80BaF59336B304d";
-const ORACLE="0xB36fcC44EFA9B3c468B6bD5B9874C17D09f2E432";
-const POOL="0x1D761E61ade0d9F97fE7652c3a02930b06764526";
-const BOOK="0x28238E7f47802c991fC950b01262Dc2ba0c9045f";
+const ORACLE="0xF3F122bE3f40921cabe5cfACA8263615bA16d426";
+const POOL="0x4f7ef640d80b2C57bd3B27c492bF3B6C60162395";
+const BOOK="0xFF0b265eA737Bd5a5698393273d2080318359e4B";
 const FXRP_ADDR="0x0b6A3645c240605887a5532109323A3E12273dc7"; // FTestXRP 6dp
 const USDT0_ADDR="0xC1A5B41512496B80903D1f32d6dEa3a73212E71F"; // USD₮0 6dp
 const FEED_XRP="0x015852502f55534400000000000000000000000000", FEED_FLR="0x01464c522f55534400000000000000000000000000";
 const FTSO_ABI=["function getFeedById(bytes21) view returns (uint256 value, int8 decimals, uint64 timestamp)"];
 const POOL_ABI=["function totalAssets() view returns (uint256)","function principalOut() view returns (uint256)","function totalSupply() view returns (uint256)"];
 const ERC20_ABI=["function approve(address,uint256) returns (bool)","function allowance(address,address) view returns (uint256)","function balanceOf(address) view returns (uint256)"];
-const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)"];
+const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate,uint128 impairedLoss)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)"];
 const POOLW_ABI=["function deposit(uint256,address) returns (uint256)","function redeem(uint256,address,address) returns (uint256)","function balanceOf(address) view returns (uint256)","function convertToAssets(uint256) view returns (uint256)"];
 const MK={
   FXRP:{img:"assets/fxrp.png",name:"FXRP",sub:"XRP · FAsset",price:0,live:true,tiers:[{n:"Standard",d:7,ltv:50,fee:2.0},{n:"Extended",d:30,ltv:45,fee:3.5}]},
   STXRP:{img:"assets/stxrp.png",name:"stXRP",sub:"Firelight staked XRP",price:0,soon:true,tiers:[{n:"Standard",d:7,ltv:50,fee:2.0},{n:"Extended",d:30,ltv:45,fee:3.5}]},
-  SFLR:{img:"assets/sflr.png",name:"sFLR",sub:"Sceptre staked FLR",price:0,soon:true,tiers:[{n:"Short",d:7,ltv:65,fee:2.0},{n:"Standard",d:30,ltv:60,fee:3.0}]},
+  SFLR:{img:"assets/sflr.png",name:"sFLR",sub:"Sceptre staked FLR",price:0,soon:true,tiers:[{n:"Short",d:7,ltv:55,fee:2.0},{n:"Standard",d:30,ltv:45,fee:3.0}]},
 };
 let COLL="FXRP", TIER=0;
 const $=id=>document.getElementById(id);
@@ -534,7 +534,7 @@ function terms(){const m=MK[COLL];$("terms").innerHTML=m.tiers.map((t,i)=>`<div 
 window.pickTier=i=>{TIER=i;terms();preview();};
 function setColl(k){COLL=k;TIER=0;$("collTag").textContent=MK[k].name;terms();preview();}
 function preview(){const m=MK[COLL],t=m.tiers[TIER],a=parseFloat($("amt").value)||0;const val=a*m.price,pr=val*t.ltv/100,fee=pr*t.fee/100,due=new Date(Date.now()+t.d*864e5);
-  $("q-recv").textContent=usd(pr);$("q-fee").textContent=usd(fee);$("q-repay").textContent=usd(pr+fee);
+  $("q-recv").textContent=usd(pr-fee);$("q-fee").textContent=usd(fee);$("q-repay").textContent=usd(pr);
   $("q-due").textContent=due.toLocaleDateString('en-US',{month:"short",day:"numeric",year:"numeric"});
   $("q-note").innerHTML=`Locking <b>${a.toLocaleString('en-US')} ${MK[COLL].name}</b> (${usd(val)}) at ${t.ltv}% LTV, priced by FTSOv2.`+(COLL!=="FXRP"?` ${MK[COLL].name} keeps earning staking yield for the full term.`:"");
   if($("b-px"))$("b-px").textContent=m.price?priceUsd(m.price):"…";
@@ -690,7 +690,7 @@ async function loadPositions(){
     const book=new ethers.Contract(BOOK,[...BOOK_ABI,"function nextLoanId() view returns (uint256)"],rp);
     const n=Number(await book.nextLoanId()); let out=""; let loanCount=0;
     for(let id=1;id<n;id++){ const L=await book.loans(id);
-      if(L.active && L.borrower.toLowerCase()===account.toLowerCase()){ const due=L.principal+L.fee; loanCount++;
+      if(L.active && L.borrower.toLowerCase()===account.toLowerCase()){ const due=L.principal; loanCount++;
         out+=`<div class="posrow"><div><b>${(Number(L.collAmount)/1e6).toLocaleString('en-US')} FXRP</b><small>borrowed ${usd(Number(L.principal)/1e6)} · repay ${usd(Number(due)/1e6)} by ${new Date(Number(L.dueAt)*1000).toLocaleDateString('en-US',{month:"short",day:"numeric",year:"numeric"})}</small></div><div class="posr"><button class="btn btn-red btn-sm" onclick="doRepay('${id}','${due}')">Repay</button></div></div>`;
       }
     }
@@ -736,7 +736,7 @@ if(document.readyState==="loading") document.addEventListener("DOMContentLoaded"
     <p class="onb-lead">No-liquidation, fixed-term lending on Flare. Here is the whole protocol in three steps.</p>
     <div class="onb-steps">
       <div class="onb-step"><span class="n">1</span><div><b>Lock collateral</b><p>Deposit FXRP, sFLR or stXRP. It keeps earning its staking yield the entire time it is locked.</p></div></div>
-      <div class="onb-step"><span class="n">2</span><div><b>Borrow USD₮0</b><p>Take up to your tier's LTV and pay one small fixed fee. No interest, no health factor to babysit.</p></div></div>
+      <div class="onb-step"><span class="n">2</span><div><b>Borrow USD₮0</b><p>Take up to your tier's LTV and one small fixed fee is deducted upfront. No interest, no health factor to babysit.</p></div></div>
       <div class="onb-step"><span class="n">3</span><div><b>Repay by your deadline</b><p>Get your collateral back plus any yield it earned. Missing the deadline is the only thing that can close your loan.</p></div></div>
     </div>
     <div class="onb-badge"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>A price crash can never liquidate you. Only the calendar can.</div>
