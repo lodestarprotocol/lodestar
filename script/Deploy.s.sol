@@ -29,7 +29,9 @@ contract Deploy is Script {
         LodestarLoanBook book = new LodestarLoanBook(pool, oracle, deployer, deployer);
         pool.setLoanBook(address(book));
 
-        // Testnet: faucet dispenses 10 FXRP (~$11), so allow small loans. Mainnet keeps 10+.
+        // Testnet: faucet dispenses 10 FXRP (~$11), so allow small loans. MAINNET: set this to a
+        // meaningful value (e.g. 100e6 = $100) so the maxActiveLoans slot cap can't be cheaply
+        // exhausted by dust loans to block new borrows (slot-exhaustion priced out by capital).
         book.setMinPrincipal(1e6);
         // No DEX with FTestXRP liquidity exists on Coston2: buyout is the settlement path,
         // so no router is whitelisted here. Mainnet will whitelist SparkDEX V4 / V3.1 / Enosys.
@@ -48,7 +50,7 @@ contract Deploy is Script {
 
         vm.stopBroadcast();
 
-        console.log("=== Lodestar v1.5 deployed to Coston2 (114) ===");
+        console.log("=== Lodestar v1.6 deployed to Coston2 (114) ===");
         console.log("LodestarOracle  ", address(oracle));
         console.log("LodestarPool    ", address(pool));
         console.log("LodestarLoanBook", address(book));
