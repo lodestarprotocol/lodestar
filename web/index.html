@@ -630,9 +630,10 @@ async function loadChain(){
   }catch(e){setTx("netblock","offline");console.error(e);}
 }
 async function countLenders(pool,head){
-  const owners=new Set(); const from=Math.max(0,head-100000);
-  for(let s=from;s<=head;s+=10000){
-    try{const ev=await pool.queryFilter(pool.filters.Deposit(),s,Math.min(s+9999,head));ev.forEach(e=>owners.add(String(e.args.owner).toLowerCase()));}catch(_){}
+  // Coston2 public RPC serves ~1000-block getLogs ranges; scan the recent window in 1000-block chunks.
+  const owners=new Set(); const from=Math.max(0,head-30000);
+  for(let s=from;s<=head;s+=1000){
+    try{const ev=await pool.queryFilter(pool.filters.Deposit(),s,Math.min(s+999,head));ev.forEach(e=>owners.add(String(e.args.owner).toLowerCase()));}catch(_){}
   }
   return owners.size;
 }
