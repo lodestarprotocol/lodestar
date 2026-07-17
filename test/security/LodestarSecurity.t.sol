@@ -31,7 +31,7 @@ contract LodestarSecurityTest is Test {
         ftso = new MockFtsoV2();
         ftso.set(XRP, 250_000_000, 8); // $2.50
         oracle = new LodestarOracle(address(ftso), owner);
-        oracle.setFeed(address(fxrp), XRP, address(0), 1 hours);
+        oracle.setFeed(address(fxrp), XRP, address(0), 1 hours, 0);
         pool = new LodestarPool(IERC20(address(usdt0)), owner);
         book = new LodestarLoanBook(pool, oracle, owner, owner);
         pool.setLoanBook(address(book));
@@ -199,9 +199,10 @@ contract LodestarSecurityTest is Test {
         assertFalse(active);
     }
 
-    /// impair() cannot be used to grief the pool: it only ever marks the oracle-true loss,
-    /// re-marks track the price, and repayment reverses the mark exactly.
-    function test_ImpairCannotOvermark() public {
+    /// impair() is a monotonic high-water mark: it raises the recognized loss on a crash but
+    /// never lowers it mid-life on a recovery (that would let an attacker atomically
+    /// deposit->impair->redeem and skim the reversal). The reversal happens only at close.
+    function test_ImpairIsMonotonicHighWaterMark() public {
         uint256 id = _borrow(borrower, 1_000e6);
         vm.warp(block.timestamp + 7 days + 48 hours + 1);
 
@@ -209,14 +210,21 @@ contract LodestarSecurityTest is Test {
         book.impair(id);
         assertEq(pool.impairedLoss(), 0, "no loss to mark while covered");
 
-        // crash: mark appears; recovery: mark shrinks back
+        // crash: mark appears
         ftso.set(XRP, 50_000_000, 8);
         book.impair(id);
         uint256 marked = pool.impairedLoss();
         assertGt(marked, 0);
+
+        // a deeper crash RAISES the mark
+        ftso.set(XRP, 25_000_000, 8);
+        book.impair(id);
+        assertGt(pool.impairedLoss(), marked, "mark did not rise on a deeper crash");
+
+        // a recovery does NOT lower it mid-life (high-water); it holds until the loan closes
         ftso.set(XRP, 200_000_000, 8); // $2.00: collateral covers again
         book.impair(id);
-        assertEq(pool.impairedLoss(), 0, "mark not reversed on recovery");
+        assertGt(pool.impairedLoss(), 0, "mark wrongly reversed mid-life on recovery");
     }
 
     /// Pause blocks NEW borrows but never touches existing loans or funds.

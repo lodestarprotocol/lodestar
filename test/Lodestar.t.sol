@@ -126,8 +126,8 @@ contract LodestarTest is Test {
         sflrRate = new MockRate(); // 1 sFLR = 1 FLR initially
 
         oracle = new LodestarOracle(address(ftso), owner);
-        oracle.setFeed(address(fxrp), XRP_USD, address(0), 1 hours);
-        oracle.setFeed(address(sflr), FLR_USD, address(sflrRate), 1 hours);
+        oracle.setFeed(address(fxrp), XRP_USD, address(0), 1 hours, 0);
+        oracle.setFeed(address(sflr), FLR_USD, address(sflrRate), 1 hours, 0);
 
         pool = new LodestarPool(IERC20(address(usdt0)), owner);
         book = new LodestarLoanBook(pool, oracle, reserve, owner);
@@ -360,7 +360,7 @@ contract LodestarTest is Test {
         assertEq(pool.totalAssets(), assetsBefore, "pool restored");
     }
 
-    function test_ExtremeCrashMidTerm_ImpairTracksAndReverses() public {
+    function test_ExtremeCrashMidTerm_ImpairMonotonicThenClearsAtRepay() public {
         // the "80% in one day" scenario: crash on day 2 of a 7-day term
         uint256 id = _openFxrp(borrower, 1000e6);
         vm.warp(block.timestamp + 2 days);
@@ -377,16 +377,21 @@ contract LodestarTest is Test {
         assertTrue(active);
         assertEq(fxrp.balanceOf(address(book)), 1000e6, "collateral moved on impair");
 
-        // price recovers before the deadline: anyone re-marks to zero, then normal repay
+        // MONOTONIC: a mid-life recovery does NOT lower the mark (that would enable an atomic
+        // deposit->impair->redeem skim). The mark holds at the high-water level until the loan
+        // actually closes.
         ftso.set(XRP_USD, 250_000_000, 8);
         book.impair(id);
-        assertEq(pool.impairedLoss(), 0, "recovery not reversed");
+        assertEq(pool.impairedLoss(), 775e6, "mark wrongly lowered on mid-life recovery");
+
+        // the reversal happens at realization: repay clears the mark in full.
         usdt0.mint(borrower, 25e6);
         vm.startPrank(borrower);
         usdt0.approve(address(pool), type(uint256).max);
         book.repay(id);
         vm.stopPrank();
-        assertEq(pool.totalAssets(), assetsBefore, "pool not restored after recovery + repay");
+        assertEq(pool.impairedLoss(), 0, "mark not cleared at repay");
+        assertEq(pool.totalAssets(), assetsBefore, "pool not restored after repay");
         assertEq(fxrp.balanceOf(borrower), 1000e6, "borrower collateral back");
     }
 
@@ -627,7 +632,7 @@ contract LodestarTest is Test {
         vm.expectRevert(LodestarLoanBook.BadParam.selector);
         book.setRiskParams(48 hours, 1100, 500, 2000); // keeper >10% forbidden
         vm.expectRevert(LodestarOracle.BadParam.selector);
-        oracle.setFeed(address(fxrp), XRP_USD, address(0), 0); // staleness bound mandatory
+        oracle.setFeed(address(fxrp), XRP_USD, address(0), 0, 0); // staleness bound mandatory
     }
 
     function test_WithdrawReserve() public {

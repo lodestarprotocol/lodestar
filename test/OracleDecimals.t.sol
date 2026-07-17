@@ -19,8 +19,8 @@ contract OracleDecimalsTest is Test {
         token6 = new MockERC20("T6", "T6", 6);
         token18 = new MockERC20("T18", "T18", 18);
         oracle = new LodestarOracle(address(ftso), address(this));
-        oracle.setFeed(address(token6), FEED, address(0), 1 days);
-        oracle.setFeed(address(token18), FEED, address(0), 1 days);
+        oracle.setFeed(address(token6), FEED, address(0), 1 hours, 0);
+        oracle.setFeed(address(token18), FEED, address(0), 1 hours, 0);
     }
 
     /// Any (raw value, decimals) pair normalises to raw * 10**(18-decimals), for all decimals 0..18.
