@@ -152,7 +152,8 @@ contract LodestarSecurityTest is Test {
         assertEq(fxrp.balanceOf(borrower), 0, "borrower extracted a bounty from their own default");
     }
 
-    /// A price crash cannot liquidate an in-term loan, no matter how deep.
+    /// A price crash cannot liquidate an in-term loan, no matter how deep. Impairing it
+    /// marks the pool's accounting but never touches the loan or the collateral.
     function test_NoLiquidationOnCrashInTerm() public {
         uint256 id = _borrow(borrower, 1_000e6);
         ftso.set(XRP, 25_000_000, 8); // XRP crashes 90% to $0.25
@@ -160,8 +161,12 @@ contract LodestarSecurityTest is Test {
         book.buyout(id, type(uint256).max);
         vm.expectRevert(LodestarLoanBook.NotYetDefaulted.selector);
         book.settleSwap(id, address(router), _swapData(950e6), 0);
-        vm.expectRevert(LodestarLoanBook.NotYetDefaulted.selector);
-        book.impair(id);
+        book.impair(id); // accounting-only: allowed mid-term
+        assertGt(pool.impairedLoss(), 0, "mid-term crash marked");
+        (,,, uint256 principal,,,,, bool active,,) = book.loans(id);
+        assertTrue(active, "loan still alive");
+        assertEq(fxrp.balanceOf(address(book)), 1_000e6, "collateral untouched");
+        assertGt(principal, 0);
         assertFalse(book.isDefaulted(id));
     }
 

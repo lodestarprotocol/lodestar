@@ -395,13 +395,17 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     }
 
     // ------------------------------------------------------------------ default handling
-    /// @notice Mark a defaulted loan's expected loss into the pool immediately (permissionless).
-    ///         Prevents lenders who watch the chain from exiting at par ahead of a markdown.
-    ///         Re-callable to track the oracle; fully reversed if the loan is later repaid,
-    ///         trued up at settlement.
+    /// @notice Mark a loan's expected loss into the pool immediately (permissionless).
+    ///         Callable on ANY active loan: healthy positions mark zero, underwater positions
+    ///         mark the oracle-true gap. This keeps the share price honest mark-to-market the
+    ///         moment a crash puts a loan underwater (even mid-term), so no lender can exit at
+    ///         par ahead of bad news. It never touches the borrower or the collateral: the mark
+    ///         is fully reversed if the price recovers or the loan is repaid, and trued up at
+    ///         settlement. Marking assumes default (recovery = collateral value less the keeper
+    ///         share), the conservative choice while a repayment is still possible.
     function impair(uint256 id) external nonReentrant {
         Loan storage L = loans[id];
-        if (!isDefaulted(id)) revert NotYetDefaulted();
+        if (!L.active) revert NotActive();
 
         uint256 collValue18 = oracle.usdValue18(L.collateral, L.collAmount); // reverts while FTSO is down
         _cachePrice(L.collateral, collValue18, L.collAmount);

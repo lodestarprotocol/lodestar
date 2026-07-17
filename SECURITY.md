@@ -64,6 +64,18 @@ New improvements shipped (for the next redeploy; live Coston2 runs v1.0):
 - **v1.2 gas:** `Loan` packed to 6 slots (uint128 fields, SafeCast-guarded) → open() ~21k cheaper. `openRate` packs with `active` at no extra slot. Covered by the invariant suite (512k ops) and a `test_YieldSkimRoutesAppreciationToReserve` unit test.
 
 
+## v1.3.1 — 2026-07-17 (extreme-scenario hardening)
+
+`impair(id)` is now callable on any active loan, not only defaulted ones. In a tail crash
+(e.g. an 80% single-day move) a loan can be underwater mid-term; anyone can now mark that
+expected loss into the ERC4626 share price immediately, so no lender can redeem at par ahead
+of the markdown. It remains accounting-only — the borrower keeps full repay/recover optionality
+and the collateral never moves — and the mark auto-reverses if price recovers or the loan is
+repaid. Coston2 v1.3.1: Book `0x1957E04fA22Aa84E6B61DCC02ea67D66Eff2D5f3`, Pool
+`0x0D5af8Ff7425D67Fbe0F55BE1c5AB68490f5e4c6`, Oracle `0x57F4A29dC332aB48AA56a04aB1cC97734bBF32A2`.
+Battery: 52 tests green (48 unit/security/oracle/invariant + 4 mainnet fork incl. real SparkDEX settlement),
+incl. `test_ExtremeCrashMidTerm_ImpairTracksAndReverses` and `test_ImpairHealthyLoanIsNoOp`.
+
 ## v1.3 settlement redesign — 2026-07-17 (foundation review)
 
 Driven by a three-agent review (mechanism economics + measured mainnet DEX depth + 9.5y drawdown
@@ -79,7 +91,7 @@ SparkDEX V3.1 router** (`test_fork_SettleSwapThroughRealSparkDEX`).
 | **Cached last-good price** (`lastPrice18`) | FTSO outage past `oracleFallbackDelay` now decays the floor from the cached price to zero over 30 days, instead of dropping instantly to zero (killed a keeper self-sandwich extraction in the outage tail). |
 | **Rollover LTV re-check** (`Undercollateralized`) + `addCollateral` cure | Unconditional extensions let an underwater borrower buy 90 days of a mispriced put (drawdown data: 4-7% breach for XRP, 33-43% for the old FLR tiers). Every calendar extension must re-qualify at current prices. |
 | **Fee netted from disbursement** | Fee is earned with probability 1 (a defaulter has already paid it); repay is principal-only; waterfall simplifies to principal -> penalty -> surplus. |
-| **Permissionless `impair(id)`** + pool `impairedLoss` | Marks a defaulted loan's expected loss into the share price immediately, closing the informed-lender exit window between default and settlement. Reversed on repay, trued up at settlement. |
+| **Permissionless `impair(id)`** + pool `impairedLoss` | Marks a loan's expected loss into the share price. v1.3.1: callable on ANY active loan (was default-only), so an extreme mid-term crash is marked-to-market the moment it puts a loan underwater — closing the informed-lender exit window even before default. Healthy loans mark zero; accounting-only (never touches borrower/collateral); reversed on price recovery or repay, trued up at settlement. |
 | **First-loss reserve buffer** (`reserveBalance` held in the book) | Fee cuts + penalties accumulate on-chain and automatically cover lender shortfalls before anything else; owner withdrawals are explicit (`withdrawReserve`). |
 | **Bounty hygiene** | USD cap ($500 default), zero bounty on self-settlement, `minPrincipal` dust guard. |
 | **Tighter bounds** | `addTier` LTV <= 70% (was 90), `keeperBps` <= 10% (was 20), oracle `maxStale` mandatory (0 forbidden, <= 1 day). |

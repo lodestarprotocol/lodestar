@@ -360,6 +360,44 @@ contract LodestarTest is Test {
         assertEq(pool.totalAssets(), assetsBefore, "pool restored");
     }
 
+    function test_ExtremeCrashMidTerm_ImpairTracksAndReverses() public {
+        // the "80% in one day" scenario: crash on day 2 of a 7-day term
+        uint256 id = _openFxrp(borrower, 1000e6);
+        vm.warp(block.timestamp + 2 days);
+        ftso.set(XRP_USD, 50_000_000, 8); // $2.50 -> $0.50
+
+        uint256 assetsBefore = pool.totalAssets();
+        book.impair(id); // permissionless, mid-term
+        // expected recovery 500 * 95% = 475 vs principal 1250 -> 775 marked instantly
+        assertEq(pool.impairedLoss(), 775e6, "mid-term loss not marked");
+        assertEq(pool.totalAssets(), assetsBefore - 775e6, "share price not marked down");
+
+        // the loan itself is untouched: no liquidation, borrower keeps full optionality
+        (,,,,,,,, bool active,,) = book.loans(id);
+        assertTrue(active);
+        assertEq(fxrp.balanceOf(address(book)), 1000e6, "collateral moved on impair");
+
+        // price recovers before the deadline: anyone re-marks to zero, then normal repay
+        ftso.set(XRP_USD, 250_000_000, 8);
+        book.impair(id);
+        assertEq(pool.impairedLoss(), 0, "recovery not reversed");
+        usdt0.mint(borrower, 25e6);
+        vm.startPrank(borrower);
+        usdt0.approve(address(pool), type(uint256).max);
+        book.repay(id);
+        vm.stopPrank();
+        assertEq(pool.totalAssets(), assetsBefore, "pool not restored after recovery + repay");
+        assertEq(fxrp.balanceOf(borrower), 1000e6, "borrower collateral back");
+    }
+
+    function test_ImpairHealthyLoanIsNoOp() public {
+        uint256 id = _openFxrp(borrower, 1000e6);
+        uint256 assetsBefore = pool.totalAssets();
+        book.impair(id);
+        assertEq(pool.impairedLoss(), 0, "healthy loan marked");
+        assertEq(pool.totalAssets(), assetsBefore, "share price moved on healthy impair");
+    }
+
     function test_ImpairTruedUpAtSettlement_ReserveCoversFirst() public {
         // build a reserve buffer with a fee-paying loan first
         uint256 id0 = _openFxrp(address(0xFEE), 1000e6);
