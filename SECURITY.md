@@ -64,6 +64,29 @@ New improvements shipped (for the next redeploy; live Coston2 runs v1.0):
 - **v1.2 gas:** `Loan` packed to 6 slots (uint128 fields, SafeCast-guarded) → open() ~21k cheaper. `openRate` packs with `active` at no extra slot. Covered by the invariant suite (512k ops) and a `test_YieldSkimRoutesAppreciationToReserve` unit test.
 
 
+## v1.5 — 2026-07-17 (phantom-solvency closed on-chain)
+
+The one item v1.4 left as "documented, run a keeper" is now fixed in the contract. The lazy-mark
+window (an underwater loan sitting unmarked lets a fast lender exit at par) is closed on-chain:
+
+- The book keeps an array of active loan ids (`activeLoanIds`, pushed at open, swap-removed at
+  close) and a permissionless `syncImpairment()` that sweeps it, marking every underwater loan
+  (raise-only, per-collateral price cached once so oracle reads are O(collaterals) and the loop is
+  O(loans)).
+- **The pool calls `syncImpairment()` at the start of every `withdraw`/`redeem`.** So the share
+  price is provably fresh at the exact moment anyone exits — no lender can ever redeem against a
+  stale, too-high price. A keeper calling `impairMany`/`syncImpairment` during volatility is now a
+  UI-freshness convenience, not a safety dependency.
+- `maxActiveLoans` (default 500, owner-settable 50–5000) bounds the sweep so a withdrawal can never
+  be gas-bricked. Viable here because Flare gas is cheap; the O(n) sweep costs cents.
+
+New invariant: `activeLoanIds` exactly equals the set of active loans (fuzz-checked). Regressions:
+`test_WithdrawMarksUnmarkedUnderwaterLoan_NoParExit` (the core proof), `test_ActiveLoanArrayTracksOpenLoans`,
+`test_MaxActiveLoansCapEnforced`. **91/91 tests.** Coston2 v1.5: Book
+`0x89EC39E4f6B9dBa13eF1F6B805087CCDdFFB9e42`, Pool `0xf50Bdc85F5ffc3fD94C3DE47d291c4F51573B97c`,
+Oracle `0x1551874aEa6450Af3723985dACcBd5cAf91803B7`. The phantom-solvency window moves from the
+"documented risks" list to fixed.
+
 ## v1.4 — 2026-07-17 (six-agent deep-ocean review + hardening)
 
 A second, deeper adversarial round: six independent agents on non-overlapping surfaces that the
@@ -170,7 +193,7 @@ SparkDEX V3.1 router** (`test_fork_SettleSwapThroughRealSparkDEX`).
 
 ## Documented risks (by design, disclose to users; not code bugs)
 
-- **Lazy-mark phantom-solvency window.** `impair` is permissionless but not automatic, so between a loan going underwater and someone marking it, the share price overstates realizable value and an informed lender could exit at par ahead of the markdown. Mitigation: `impairMany` + a keeper bot that marks during volatility. The structural backstop is conservative LTV; run a marking keeper at mainnet.
+- ~~**Lazy-mark phantom-solvency window.**~~ FIXED on-chain in v1.5: the pool calls `syncImpairment()` (which sweeps and marks the whole active book) at the start of every `withdraw`/`redeem`, so the share price is always fresh at exit. A marking keeper is now optional (UI freshness), not a safety requirement.
 - **First-loss buffer is a fair-weather cushion (~40 bps of principal), not a crash backstop.** It absorbs small idiosyncratic shortfalls; in a correlated crash it depletes and lenders eat the raw remainder. The real protection is the LTV, not the buffer. Do not market the buffer as crash insurance.
 - **Exit liquidity is idle-balance-bounded and FCFS.** Redemption ≤ `available()`; principal that is lent out cannot be redeemed until it returns. In a run, the slow are temporarily illiquid (correctly priced, not lost). A withdrawal queue / exit fee is a candidate future design.
 - **USDT0 is the unit of account.** "Lenders made whole" means USDT0 units, not dollars; lenders bear USDT0 depeg risk by choosing to lend USDT0. No USDT0/USD feed is wired (candidate: a band-check to pause new borrows on depeg).

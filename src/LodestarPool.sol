@@ -9,6 +9,10 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
+interface ILoanBookSync {
+    function syncImpairment() external;
+}
+
 /// @title LodestarPool
 /// @notice ERC4626 lender vault denominated in the stable (USDT0). Lenders earn as
 ///         borrower fees (and, later, harvested collateral yield) accrue into the pool,
@@ -128,13 +132,23 @@ contract LodestarPool is ERC4626, Ownable, ReentrancyGuard {
     }
 
     function withdraw(uint256 assets, address receiver, address owner_) public override nonReentrant returns (uint256) {
+        _syncImpairment(); // mark the whole book fresh so this exit can't be at a stale-high price
         if (assets > available()) revert InsufficientLiquidity();
         return super.withdraw(assets, receiver, owner_);
     }
 
     function redeem(uint256 shares, address receiver, address owner_) public override nonReentrant returns (uint256) {
+        _syncImpairment();
         if (previewRedeem(shares) > available()) revert InsufficientLiquidity();
         return super.redeem(shares, receiver, owner_);
+    }
+
+    /// @dev Force the LoanBook to mark every active loan's current expected loss into the share
+    ///      price before an exit is priced. Closes the phantom-solvency window on-chain: no lender
+    ///      can redeem against an unmarked underwater loan. The book bounds its own loop.
+    function _syncImpairment() internal {
+        address lb = loanBook;
+        if (lb != address(0)) ILoanBookSync(lb).syncImpairment();
     }
 
     /// @dev Extra share precision hardens against ERC4626 first-depositor inflation/donation
