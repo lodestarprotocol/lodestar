@@ -51,15 +51,15 @@ FOUNDRY_INVARIANT_RUNS=512 FOUNDRY_INVARIANT_DEPTH=500 \
 
 - **App:** https://lodestarprotocol.xyz
 - **Network:** Coston2 testnet (chainId 114), priced by the live Coston2 FTSOv2
-- **Contracts (v1.5):**
-  - `LodestarLoanBook`: [`0x89EC39E4f6B9dBa13eF1F6B805087CCDdFFB9e42`](https://coston2-explorer.flare.network/address/0x89EC39E4f6B9dBa13eF1F6B805087CCDdFFB9e42)
-  - `LodestarPool`: `0xf50Bdc85F5ffc3fD94C3DE47d291c4F51573B97c`
-  - `LodestarOracle`: `0x1551874aEa6450Af3723985dACcBd5cAf91803B7`
+- **Contracts (v1.6):**
+  - `LodestarLoanBook`: [`0x4Ca4a3a8e14d2e2F1aa29EF7904E8e0Eb7359c47`](https://coston2-explorer.flare.network/address/0x4Ca4a3a8e14d2e2F1aa29EF7904E8e0Eb7359c47)
+  - `LodestarPool`: `0xe7D4a03f1814F3e5A3A485f2fe16EB5DC1097B8b`
+  - `LodestarOracle`: `0x4302410FE3B1Cf99199086453C013783C5a6Bd4c`
   - collateral: FTestXRP `0x0b6A…3dc7`, stable: USD₮0 `0xC1A5…E71F`
 
 ## Status
 
-v1.5, **91/91 tests passing** (30 unit, 4 oracle-decimals fuzz, 14 adversarial/hardening, 7 core and 9 stress invariants, 8 economic-game, 4 live-Flare fork). Two adversarial review rounds are done: no external fund-theft path, and the real findings were lender-vs-lender fairness seams and retroactive-governance risk, all fixed (monotonic impairment, per-loan term snapshots, oracle haircut and tighter staleness, settlement-aware buffer) or documented honestly (the buffer as a fair-weather cushion, USDT0 as the unit of account). v1.5 closes the last structural item on-chain: the pool sweeps and marks the whole active book on every withdraw/redeem, so no lender can exit against a stale share price (the marking keeper is now optional). Deployed to Coston2. Not yet mainnet: the owner is still a single EOA pending a multisig and timelock, with a per-parameter disposition written up in `SECURITY.md`.
+v1.6, **95/95 tests passing** (30 unit, 4 oracle-decimals fuzz, 14 adversarial/hardening, 7 core and 9 stress invariants, 8 economic-game, 4 live-Flare fork). Two adversarial review rounds are done: no external fund-theft path, and the real findings were lender-vs-lender fairness seams and retroactive-governance risk, all fixed (monotonic impairment, per-loan term snapshots, oracle haircut and tighter staleness, settlement-aware buffer) or documented honestly (the buffer as a fair-weather cushion, USDT0 as the unit of account). v1.5 closes the last structural item on-chain: the pool sweeps and marks the whole active book on every withdraw/redeem, so no lender can exit against a stale share price (the marking keeper is now optional). Deployed to Coston2. Not yet mainnet: the owner is still a single EOA pending a multisig and timelock, with a per-parameter disposition written up in `SECURITY.md`.
 
 ```shell
 forge build && forge test -vv
