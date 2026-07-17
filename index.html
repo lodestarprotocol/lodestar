@@ -549,7 +549,7 @@ const FEED_XRP="0x015852502f55534400000000000000000000000000", FEED_FLR="0x01464
 const FTSO_ABI=["function getFeedById(bytes21) view returns (uint256 value, int8 decimals, uint64 timestamp)"];
 const POOL_ABI=["function totalAssets() view returns (uint256)","function principalOut() view returns (uint256)","function totalSupply() view returns (uint256)"];
 const ERC20_ABI=["function approve(address,uint256) returns (bool)","function allowance(address,address) view returns (uint256)","function balanceOf(address) view returns (uint256)"];
-const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate,uint128 impairedLoss)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)"];
+const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function partialRepay(uint256,uint256,uint256,uint256,uint256)","function minPrincipal() view returns (uint128)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate,uint128 impairedLoss)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)"];
 const POOLW_ABI=["function deposit(uint256,address) returns (uint256)","function redeem(uint256,address,address) returns (uint256)","function balanceOf(address) view returns (uint256)","function convertToAssets(uint256) view returns (uint256)"];
 const MK={
   FXRP:{img:"assets/fxrp.png",name:"FXRP",sub:"XRP · FAsset",price:0,live:true,tiers:[{n:"Standard",d:7,ltv:50,fee:2.0},{n:"Extended",d:30,ltv:45,fee:3.5}]},
@@ -741,6 +741,23 @@ window.doRepay=async(id,due)=>{
     toast("Repaid. Your collateral is back in your wallet.","ok"); refreshAll();
   }catch(e){ console.error(e); toast("Repay failed: "+errMsg(e),"err"); }
 };
+window.togglePartial=(id)=>{ const p=$("prp-"+id); if(!p) return; const open=p.style.display!=="none"; p.style.display=open?"none":"flex"; if(!open){ const i=$("pr-"+id); if(i) i.focus(); } };
+window.doPartial=async(id,principalStr)=>{
+  if(!account) return openWalletPicker();
+  const el=$("pr-"+id), v=parseFloat(el&&el.value);
+  if(!(v>0)){ toast("Enter a USD₮0 amount to pay down.","err"); return; }
+  const amt=u6(el.value), principal=BigInt(principalStr);
+  if(amt>=principal){ toast("That covers the whole loan — use Repay to close it.","err"); return; }
+  try{
+    const tok=C(USDT0_ADDR,ERC20_ABI), book=C(BOOK,BOOK_ABI);
+    const minP=await book.minPrincipal();
+    if(principal-amt<minP){ toast("Leave at least "+usd(Number(minP)/1e6)+" owed, or use Repay to close the loan.","err"); return; }
+    if(await tok.balanceOf(account)<amt){ toast("You need "+usd(v)+" USD₮0 for this pay-down.","err"); return; }
+    if(await tok.allowance(account,POOL)<amt){ toast("Approve USD₮0…"); await (await tok.approve(POOL,amt)).wait(); }
+    toast("Paying down…"); await (await book.partialRepay(BigInt(id),amt,0n,0n,0n)).wait();
+    toast("Paid down. Your debt is lower and your collateral stays locked until you repay in full.","ok"); refreshAll();
+  }catch(e){ console.error(e); toast("Pay-down failed: "+errMsg(e),"err"); }
+};
 window.doWithdraw=async()=>{
   if(!account) return;
   try{ const pool=C(POOL,POOLW_ABI); const sh=await pool.balanceOf(account); toast("Withdrawing…"); await (await pool.redeem(sh,account,account)).wait(); toast("Withdrawn to your wallet.","ok"); refreshAll(); }
@@ -755,7 +772,8 @@ async function loadPositions(){
     const n=Number(await book.nextLoanId()); let out=""; let loanCount=0;
     for(let id=1;id<n;id++){ const L=await book.loans(id);
       if(L.active && L.borrower.toLowerCase()===account.toLowerCase()){ const due=L.principal; loanCount++;
-        out+=`<div class="posrow"><div><b>${(Number(L.collAmount)/1e6).toLocaleString('en-US')} FXRP</b><small>borrowed ${usd(Number(L.principal)/1e6)} · repay ${usd(Number(due)/1e6)} by ${new Date(Number(L.dueAt)*1000).toLocaleDateString('en-US',{month:"short",day:"numeric",year:"numeric"})}</small></div><div class="posr"><button class="btn btn-red btn-sm" onclick="doRepay('${id}','${due}')">Repay</button></div></div>`;
+        out+=`<div class="posrow"><div><b>${(Number(L.collAmount)/1e6).toLocaleString('en-US')} FXRP</b><small>borrowed ${usd(Number(L.principal)/1e6)} · repay ${usd(Number(due)/1e6)} by ${new Date(Number(L.dueAt)*1000).toLocaleDateString('en-US',{month:"short",day:"numeric",year:"numeric"})}</small></div><div class="posr"><button class="btn btn-ln btn-sm" onclick="togglePartial('${id}')">Pay down</button><button class="btn btn-red btn-sm" onclick="doRepay('${id}','${due}')">Repay</button></div></div>`;
+        out+=`<div id="prp-${id}" style="display:none;gap:8px;align-items:center;justify-content:flex-end;padding:0 14px 12px"><span style="font-size:12px;color:var(--ink2)">Pay down part of the debt, collateral stays locked</span><div class="inp" style="max-width:170px;padding:6px 10px;margin:0"><input id="pr-${id}" type="number" min="0" placeholder="Amount"/><span class="u">USD₮0</span></div><button class="btn btn-red btn-sm" onclick="doPartial('${id}','${L.principal}')">Confirm</button></div>`;
       }
     }
     const loanHTML=out||emptyHTML("No open loans","Lock collateral to borrow.");
