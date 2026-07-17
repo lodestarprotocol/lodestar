@@ -56,6 +56,9 @@ contract LodestarOracle is Ownable {
             if (rate == 0) revert BadPrice();
             price18 = (price18 * rate) / 1e18;
         }
+        // Guard the *scaled* price, not just the raw feed value: a feed whose decimals exceed
+        // 18 enough to floor to zero would otherwise pass as a legitimate (mispriced) zero.
+        if (price18 == 0) revert BadPrice();
         return price18;
     }
 

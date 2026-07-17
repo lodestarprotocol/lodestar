@@ -132,6 +132,7 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     error RouterNotAllowed();
     error SwapFailed();
     error SwapIncomplete();
+    error ProceedsTooHigh();
     error BelowFloor();
     error CostAboveMax();
     error Undercollateralized();
@@ -338,6 +339,11 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         uint16 skimBps = yieldSkimBps;
         if (skimBps != 0 && L.openRate != 0) {
             uint256 nowRate = oracle.rateOf(L.collateral);
+            // Clamp recognized appreciation to 20% over the (<=90d) term. Real LST staking
+            // yield is a few percent; anything beyond this is a manipulated/abnormal rate
+            // provider, and we refuse to skim the borrower on it (favours the borrower).
+            uint256 maxRate = (uint256(L.openRate) * 12_000) / 10_000;
+            if (nowRate > maxRate) nowRate = maxRate;
             if (nowRate > L.openRate) {
                 uint256 gain = (L.collAmount * (nowRate - L.openRate)) / nowRate;
                 uint256 skim = (gain * skimBps) / 10_000;
@@ -407,9 +413,19 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         Loan storage L = loans[id];
         if (!L.active) revert NotActive();
 
-        uint256 collValue18 = oracle.usdValue18(L.collateral, L.collAmount); // reverts while FTSO is down
-        _cachePrice(L.collateral, collValue18, L.collAmount);
-        uint256 est = (_usd18ToStable(collValue18) * (10_000 - keeperBps)) / 10_000;
+        // Value the collateral off the live oracle, or the cached last-good price if FTSO is
+        // stalled. A crash is exactly when marking matters most and when a feed is most likely
+        // to lag, so impair must not depend on a live oracle to close the exit window.
+        uint256 valStable;
+        try oracle.usdValue18(L.collateral, L.collAmount) returns (uint256 v18) {
+            _cachePrice(L.collateral, v18, L.collAmount);
+            valStable = _usd18ToStable(v18);
+        } catch {
+            uint256 p18 = lastPrice18[L.collateral];
+            if (p18 == 0) revert OracleDown();
+            valStable = _usd18ToStable((p18 * L.collAmount) / _unit(L.collateral));
+        }
+        uint256 est = (valStable * (10_000 - keeperBps)) / 10_000;
 
         uint256 principal = L.principal;
         uint256 newLoss = est >= principal ? 0 : principal - est;
@@ -468,6 +484,16 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
 
             proceeds = _swapViaRouter(L.collateral, router, swapData, toSell);
             if (proceeds < minOut) revert BelowFloor();
+
+            // Defense in depth: the router is only ever approved for `toSell` collateral and
+            // never for the book's stable, so it cannot pull the reserve buffer. This ceiling
+            // additionally rejects a swap that reports far more stable than the sold collateral
+            // is worth — the signature of injected funds masking a low sale.
+            uint256 p18 = lastPrice18[L.collateral];
+            if (p18 != 0) {
+                uint256 saneMax = (_usd18ToStable((p18 * toSell) / _unit(L.collateral)) * 15_000) / 10_000;
+                if (proceeds > saneMax) revert ProceedsTooHigh();
+            }
         }
 
         _clearImpairment(L, id);
@@ -494,16 +520,20 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         proceeds = stable.balanceOf(address(this)) - stableBefore;
     }
 
-    /// @dev Keeper bounty in collateral: keeperBps of the collateral, USD-capped, and zero when
-    ///      the borrower settles their own default (no reward for defaulting).
+    /// @dev Keeper bounty in collateral: keeperBps of the collateral, USD-capped. Zero when
+    ///      the borrower settles their own default (no reward for defaulting) AND zero when the
+    ///      loan is underwater — the bounty then comes only out of what would have been the
+    ///      borrower's surplus, never ahead of lenders. Underwater defaults are settled via the
+    ///      buyout path (arbitrageurs, no bounty) or by a keeper willing to settle for gas alone.
     function _bountyAmount(Loan storage L) internal returns (uint256 b) {
         if (msg.sender == L.borrower || keeperBps == 0) return 0;
-        b = (L.collAmount * keeperBps) / 10_000;
         uint256 p18 = lastPrice18[L.collateral];
-        if (p18 != 0) {
-            uint256 capTokens = (uint256(keeperCapUsd18) * _unit(L.collateral)) / p18;
-            if (b > capTokens) b = capTokens;
-        }
+        if (p18 == 0) return 0;
+        uint256 collValueStable = _usd18ToStable((p18 * L.collAmount) / _unit(L.collateral));
+        if (collValueStable < L.principal) return 0; // underwater: floor guarantee stays intact
+        b = (L.collAmount * keeperBps) / 10_000;
+        uint256 capTokens = (uint256(keeperCapUsd18) * _unit(L.collateral)) / p18;
+        if (b > capTokens) b = capTokens;
     }
 
     /// @dev Stable value of `collPortion` at `floorBps` of the oracle price. If FTSO is down:
@@ -520,8 +550,14 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
             if (p18 == 0) return 0; // no reference ever cached (cannot happen after open)
             uint256 v18 = (p18 * collPortion) / _unit(L.collateral);
             floor = (_usd18ToStable(v18) * settleFloorMinBps) / 10_000;
+            // Decay the cached-price floor over the outage, but never below 20% of it: a dead
+            // oracle should delay settlement, not hand a sniper the collateral for a pittance.
+            // In the absurd tail (oracle dead this long AND price truly below 20%) the loan
+            // simply waits for a buyer rather than settling below a sane bound.
             uint256 t = block.timestamp - fallbackAt;
-            floor = t >= ORACLE_DOWN_DECAY ? 0 : (floor * (ORACLE_DOWN_DECAY - t)) / ORACLE_DOWN_DECAY;
+            uint256 floorFloor = floor / 5; // 20%
+            floor = t >= ORACLE_DOWN_DECAY ? floorFloor : (floor * (ORACLE_DOWN_DECAY - t)) / ORACLE_DOWN_DECAY;
+            if (floor < floorFloor) floor = floorFloor;
         }
     }
 

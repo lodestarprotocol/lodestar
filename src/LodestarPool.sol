@@ -7,6 +7,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title LodestarPool
 /// @notice ERC4626 lender vault denominated in the stable (USDT0). Lenders earn as
@@ -14,7 +15,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 ///         lifting the share price. Loans draw from and repay into this pool.
 /// @dev Custody of principal-in-flight is tracked via `principalOut` so the share price
 ///      stays continuous while funds are lent. Only the LoanBook may move funds.
-contract LodestarPool is ERC4626, Ownable {
+contract LodestarPool is ERC4626, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     address public loanBook;
@@ -95,6 +96,26 @@ contract LodestarPool is ERC4626, Ownable {
     /// @notice Send `amount` of stable out of the pool (reserve cut / surplus routing).
     function payout(address to, uint256 amount) external onlyLoanBook {
         IERC20(asset()).safeTransfer(to, amount);
+    }
+
+    /// @dev Reentrancy guards on the lender entrypoints. Defense in depth: with a standard
+    ///      non-hooking stable (USDT0) these are unreachable, but if an exotic collateral is
+    ///      ever whitelisted its in-kind transfer during settlement can't re-enter to redeem
+    ///      against a transiently-inflated share price.
+    function deposit(uint256 assets, address receiver) public override nonReentrant returns (uint256) {
+        return super.deposit(assets, receiver);
+    }
+
+    function mint(uint256 shares, address receiver) public override nonReentrant returns (uint256) {
+        return super.mint(shares, receiver);
+    }
+
+    function withdraw(uint256 assets, address receiver, address owner_) public override nonReentrant returns (uint256) {
+        return super.withdraw(assets, receiver, owner_);
+    }
+
+    function redeem(uint256 shares, address receiver, address owner_) public override nonReentrant returns (uint256) {
+        return super.redeem(shares, receiver, owner_);
     }
 
     /// @dev Extra share precision hardens against ERC4626 first-depositor inflation/donation

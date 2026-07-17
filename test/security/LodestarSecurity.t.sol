@@ -191,7 +191,7 @@ contract LodestarSecurityTest is Test {
 
         uint256 assetsBefore = pool.totalAssets();
         vm.prank(keeper);
-        book.settleSwap(id, address(router), _swapData(950e6), 0);
+        book.settleSwap(id, address(router), _swapData(1_000e6), 0);
 
         assertEq(pool.principalOut(), 0, "principal not cleared after settlement");
         assertLt(pool.totalAssets(), assetsBefore, "loss not realized (phantom solvency)");

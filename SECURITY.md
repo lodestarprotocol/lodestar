@@ -64,6 +64,40 @@ New improvements shipped (for the next redeploy; live Coston2 runs v1.0):
 - **v1.2 gas:** `Loan` packed to 6 slots (uint128 fields, SafeCast-guarded) → open() ~21k cheaper. `openRate` packs with `active` at no extra slot. Covered by the invariant suite (512k ops) and a `test_YieldSkimRoutesAppreciationToReserve` unit test.
 
 
+## v1.3.2 — 2026-07-17 (three-part adversarial review + hardening)
+
+Three independent adversarial reviews were run against v1.3.1, each on a non-overlapping
+surface, every actor assumed malicious:
+1. **Settlement & arithmetic** — Dutch floor, waterfall, reserve buffer, rounding, share-price sandwich.
+2. **Access control, oracle, reentrancy** — router calldata, pool/book boundary, cache poisoning, owner blast radius.
+3. **Fuzzing & economic gaming** — invariant campaign at 512×500 (256k calls/invariant), new solvency/no-double-resolve/no-free-extraction invariants, 8 economic-game tests.
+
+**Result: no CRITICAL or HIGH fund-theft path.** The reviews confirmed (with reasoning) that
+`totalAssets` cannot underflow, the settlement waterfall has no double-spend/surplus-theft,
+`balanceOf(book) == reserveBalance` holds on every path, the pool trust boundary is airtight,
+a malicious whitelisted router cannot take more than the sale amount or misroute proceeds, and
+the owner blast radius is bounded to draining the first-loss *buffer* and griefing settlement,
+never lender principal (fully covered by the multisig+timelock migration). Findings fixed:
+
+| Finding | Sev | Fix (v1.3.2) |
+|---------|-----|--------------|
+| Keeper bounty carved ahead of the floor on underwater loans | MED | `_bountyAmount` returns 0 when the loan is underwater (collateral value < principal); underwater defaults settle via `buyout` (no bounty) or a keeper accepting gas-only. Bounty now only ever comes from surplus. |
+| `impair` hard-reverts while FTSO is stalled (reopens the exit window during a crash) | MED | `impair` falls back to the cached last-good price if the live oracle reverts, so marking works during an outage — exactly when a crash hits. |
+| Yield-skim trusts an unbounded LST rate provider | MED | recognized appreciation clamped to +20% over the term; an abnormal/manipulated rate skims the borrower nothing. |
+| Buyout cache-decay reaches zero → cheap-sniper in a prolonged outage | MED | oracle-down floor decays to a **non-zero minimum (20%)** of the cached-price floor, not zero. |
+| `impair` recovery estimate optimistic vs floor slack | LOW | accepted-minor: marking is mark-to-oracle net of the keeper haircut; the residual (floor slack of a below-par loan) is dust and trued up at settlement. Documented rather than over-marked (avoids the mirror buy-cheap-before-recovery game). |
+| Scaled oracle price could floor to zero and pass | LOW | `priceUsd18` reverts `BadPrice` on a zero *scaled* price, not just a zero raw feed value. |
+| Cross-contract reentrancy via a hookable token (not reachable with USDT0/FXRP) | INFO | `nonReentrant` added to the pool's `deposit`/`mint`/`withdraw`/`redeem` as defense in depth. |
+| "Buffer double-spend via arbitrary router calldata" (reported HIGH) | — | **Disproven as a drain:** `_swapViaRouter` only ever approves the router for `toSell` collateral, never stable, so a whitelisted router cannot pull the buffer; injecting stable only helps lenders. Kept a proceeds sanity-ceiling (reject proceeds > 1.5× oracle value of what sold) as defense in depth, plus a regression test. |
+
+Regression tests added: `test_ImpairWorksWhileOracleStalled`, `test_UnderwaterSettleSwapPaysNoBounty`,
+`test_HealthySettleSwapStillPaysBounty`, `test_ProceedsCeilingRejectsInjection`,
+`test_YieldSkimClampedOnAbnormalRate`, `test_OracleScaledZeroReverts`, plus
+`test/invariant/LodestarStress.t.sol` (9 invariants) and `test/invariant/LodestarEconGames.t.sol`
+(8 games). Coston2 v1.3.2: Book `0x15A37F0AF4559684A88C2Af16378530cB37a38c1`, Pool
+`0x91265e26F8488890Df5b6BB2cded8eFFb99Ed2A4`, Oracle `0xdA022A1643D7CdfDC8822acf7018D79b0c0FD643`.
+**76/76 tests green.**
+
 ## v1.3.1 — 2026-07-17 (extreme-scenario hardening)
 
 `impair(id)` is now callable on any active loan, not only defaulted ones. In a tail crash

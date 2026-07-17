@@ -27,19 +27,62 @@ made whole first, and any surplus (including collateral yield) returns to you.
 - `LodestarPool` — ERC4626 lender vault (USDT0); share price rises with fees/yield
 - `LodestarLoanBook` — open / repay / rollover / permissionless default settlement
 
+## Settlement (v1.3)
+
+Default resolution is deadline-triggered and permissionless. After the grace window a
+loan can be resolved two ways, both bounded by a **descending (Dutch) price floor** that
+starts at 100% of the FTSO value and eases to 85% over 24h:
+
+- **`buyout`** — anyone pays USDT0 at the current floor and takes the collateral in-kind.
+  No DEX dependency, any size.
+- **`settleSwap`** — a keeper routes the sale through an owner-whitelisted DEX router with
+  their own calldata; the contract only accepts it if the exact sale amount left and the
+  USDT0 received clears the floor.
+
+Expected losses are marked into the ERC4626 share price the moment a loan is underwater
+(permissionless `impair`), a first-loss reserve buffer absorbs shortfalls ahead of lenders,
+and the origination fee is netted at open so a defaulter has always paid it.
+
+## Audit & tests
+
+See [`SECURITY.md`](./SECURITY.md) for the full bug-class → defense map, the v1.3/v1.3.2
+change log, and the three-part adversarial review (settlement/arithmetic, access/oracle/
+reentrancy, fuzzing/economic-gaming). Test surface:
+
+- **Unit + property** (`test/Lodestar.t.sol`, `test/OracleDecimals.t.sol`) — full lifecycle,
+  extreme-crash mid-term marking, Dutch-floor decay, bounty/oracle/rounding regressions.
+- **Adversarial** (`test/security/`) — each test *tries* to break a security property.
+- **Invariant fuzz** (`test/invariant/`) — 6 core + 9 stress invariants (solvency,
+  no-double-resolution, no-free-value-extraction, buffer identity) held over 256k calls
+  each at 512×500, plus 8 economic-game tests.
+- **Live-Flare fork** (`test/fork/`) — real FTSO reads and a full default settled through
+  the **real SparkDEX V3.1 router** on mainnet state.
+
+```shell
+forge test                                            # full suite
+forge test --match-path 'test/fork/*' \
+  --fork-url https://flare-api.flare.network/ext/C/rpc  # mainnet-state fork tests
+FOUNDRY_INVARIANT_RUNS=512 FOUNDRY_INVARIANT_DEPTH=500 \
+  forge test --match-contract 'LodestarStress'        # deep invariant campaign
+```
+
 ## Live
 
 - **App:** https://lodestarprotocol.xyz
 - **Network:** Coston2 testnet (chainId 114), priced by the live Coston2 FTSOv2
-- **Contracts:**
-  - `LodestarLoanBook` — [`0x28238E7f47802c991fC950b01262Dc2ba0c9045f`](https://coston2-explorer.flare.network/address/0x28238E7f47802c991fC950b01262Dc2ba0c9045f)
-  - `LodestarPool` — `0x1D761E61ade0d9F97fE7652c3a02930b06764526`
-  - `LodestarOracle` — `0xB36fcC44EFA9B3c468B6bD5B9874C17D09f2E432`
+- **Contracts (v1.3.2):**
+  - `LodestarLoanBook` — [`0x15A37F0AF4559684A88C2Af16378530cB37a38c1`](https://coston2-explorer.flare.network/address/0x15A37F0AF4559684A88C2Af16378530cB37a38c1)
+  - `LodestarPool` — `0x91265e26F8488890Df5b6BB2cded8eFFb99Ed2A4`
+  - `LodestarOracle` — `0xdA022A1643D7CdfDC8822acf7018D79b0c0FD643`
   - collateral: FTestXRP `0x0b6A…3dc7` · stable: USD₮0 `0xC1A5…E71F`
 
 ## Status
 
-v1 — 8/8 tests pass (6 unit + 2 live-Flare fork), security-audited (see `SECURITY.md`), **deployed to Coston2**. Not yet mainnet; owner is a single EOA pending a multisig + timelock.
+v1.3.2 — **76/76 tests pass** (30 unit + 4 oracle-decimals fuzz + 9 adversarial + 6 core
+invariants + 9 stress invariants + 8 economic-game + 4 live-Flare fork, plus the deep
+invariant campaign at 512×500). Three-part adversarial review complete (see `SECURITY.md`);
+no CRITICAL/HIGH fund-theft path, findings hardened. **Deployed to Coston2.** Not yet
+mainnet; owner is a single EOA pending a multisig + timelock (the remaining blocker).
 
 ```shell
 forge build && forge test -vv

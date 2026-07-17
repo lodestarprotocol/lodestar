@@ -447,7 +447,7 @@ td:first-child{text-align:left}
           </details>
           <details>
             <summary>What protects lenders?</summary>
-            <div class="a">Five layers. First claim on settlement proceeds: principal is paid before anything else. Conservative sizing: collateral is worth about twice the debt at open, terms are capped at 90 days, and a loan can only be extended while it still meets its LTV at current prices. Concentration limits: each collateral asset has its own exposure cap. A real first-loss buffer: 20% of every fee plus all default penalties accumulate on-chain and automatically cover lender shortfalls before anyone else is paid. And honest accounting: the moment a loan defaults, its expected loss is marked into the pool price, so no lender can quietly exit ahead of bad news. Even in an extreme crash, settlement never stalls and never fills below its floor: the buyout path needs no DEX at all, so a settler can pay stable and take the collateral in-kind while arbitrageurs hedge it anywhere. The residual risk, stated honestly: lenders only take a loss if the collateral falls more than roughly half within a single term <b>and</b> the borrower abandons the position, and that loss is bounded, priced by the fees, and never hidden.</div>
+            <div class="a">Five layers. First claim on settlement proceeds: principal is paid before anything else. Conservative sizing: collateral is worth about twice the debt at open, terms are capped at 90 days, and a loan can only be extended while it still meets its LTV at current prices. Concentration limits: each collateral asset has its own exposure cap. A real first-loss buffer: 20% of every fee plus all default penalties accumulate on-chain and automatically cover lender shortfalls before anyone else is paid. And honest accounting: the moment a loan defaults, its expected loss is marked into the pool price, so no lender can quietly exit ahead of bad news. Even in an extreme crash, settlement never stalls and never fills below its floor: the buyout path needs no DEX at all, so a settler can pay stable and take the collateral in-kind while arbitrageurs hedge it anywhere. The residual risk, stated honestly: lenders only take a loss if the collateral falls more than roughly half within a single term <b>and</b> the borrower abandons the position, and that loss is bounded, priced by the fees, and never hidden. The contracts are covered by unit, adversarial, fuzz-invariant and live-Flare fork tests, and a three-part adversarial review found no path to steal lender funds.</div>
           </details>
           <details>
             <summary>Where do prices come from?</summary>
@@ -470,8 +470,8 @@ td:first-child{text-align:left}
 
       <div class="foot">
         <b style="color:var(--ink2)">Lodestar</b>, no-liquidation fixed-term lending, live on <b style="color:var(--ink2)">Coston2 testnet</b>.
-        LoanBook <span class="mono">0x1957…D5f3</span> · Pool <span class="mono">0x0D5a…e4c6</span> · Oracle <span class="mono">0x57F4…32A2</span> ·
-        <a href="https://coston2-explorer.flare.network/address/0x1957E04fA22Aa84E6B61DCC02ea67D66Eff2D5f3" target="_blank" rel="noopener" style="color:var(--red);font-weight:600">explorer ↗</a>
+        LoanBook <span class="mono">0x15A3…38c1</span> · Pool <span class="mono">0x9126…D2A4</span> · Oracle <span class="mono">0xdA02…D643</span> ·
+        <a href="https://coston2-explorer.flare.network/address/0x15A37F0AF4559684A88C2Af16378530cB37a38c1" target="_blank" rel="noopener" style="color:var(--red);font-weight:600">explorer ↗</a>
       </div>
     </div>
   </div>
@@ -482,9 +482,9 @@ td:first-child{text-align:left}
 const RPC="https://coston2-api.flare.network/ext/C/rpc";
 const CHAIN_HEX="0x72", CHAIN_NAME="Flare Testnet Coston2";
 const FTSO="0xC4e9c78EA53db782E28f28Fdf80BaF59336B304d";
-const ORACLE="0x57F4A29dC332aB48AA56a04aB1cC97734bBF32A2";
-const POOL="0x0D5af8Ff7425D67Fbe0F55BE1c5AB68490f5e4c6";
-const BOOK="0x1957E04fA22Aa84E6B61DCC02ea67D66Eff2D5f3";
+const ORACLE="0xdA022A1643D7CdfDC8822acf7018D79b0c0FD643";
+const POOL="0x91265e26F8488890Df5b6BB2cded8eFFb99Ed2A4";
+const BOOK="0x15A37F0AF4559684A88C2Af16378530cB37a38c1";
 const FXRP_ADDR="0x0b6A3645c240605887a5532109323A3E12273dc7"; // FTestXRP 6dp
 const USDT0_ADDR="0xC1A5B41512496B80903D1f32d6dEa3a73212E71F"; // USD₮0 6dp
 const FEED_XRP="0x015852502f55534400000000000000000000000000", FEED_FLR="0x01464c522f55534400000000000000000000000000";

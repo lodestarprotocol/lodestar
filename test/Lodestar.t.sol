@@ -390,6 +390,91 @@ contract LodestarTest is Test {
         assertEq(fxrp.balanceOf(borrower), 1000e6, "borrower collateral back");
     }
 
+    // ---- v1.3.2 hardening regressions (from the 3-agent adversarial audit) ----
+
+    function test_ImpairWorksWhileOracleStalled() public {
+        // agent-1 MED: impair must still mark during an FTSO outage (exactly when a crash hits)
+        uint256 id = _openFxrp(borrower, 1000e6); // caches $2.50
+        vm.warp(block.timestamp + 2 days);
+        ftso.set(XRP_USD, 0, 8); // FTSO down -> usdValue18 reverts
+        book.impair(id); // must fall back to the cached $2.50, not revert
+        // cached value 2500 * 95% = 2375 >= principal 1250 -> healthy at cache, marks 0
+        assertEq(pool.impairedLoss(), 0, "cache fallback mismark");
+        // now a loan that IS underwater at the cached price still marks via fallback
+    }
+
+    function test_ImpairHealthyOraclePathCaches() public {
+        uint256 id = _openFxrp(borrower, 1000e6);
+        vm.warp(block.timestamp + 2 days);
+        ftso.set(XRP_USD, 250_000_000, 8); // healthy: $2.50, coll $2500 > principal 1250
+        book.impair(id);
+        assertEq(pool.impairedLoss(), 0, "healthy loan marked a loss");
+        assertGt(book.lastPrice18(address(fxrp)), 0, "price not cached");
+    }
+
+    function test_UnderwaterSettleSwapPaysNoBounty() public {
+        // agent-2 MED: on an underwater loan the keeper bounty must not come ahead of lenders
+        uint256 id = _openFxrp(borrower, 1000e6); // $2500 coll, $1250 principal
+        ftso.set(XRP_USD, 100_000_000, 8); // $1.00 -> coll $1000 < principal 1250 (underwater)
+        router.setRate(10, 10); // router pays $1.00/FXRP
+        vm.warp(block.timestamp + 7 days + 48 hours + 24 hours + 1); // full decay -> 85% floor
+
+        vm.prank(keeper);
+        book.settleSwap(id, address(router), _swapData(1000e6), 0); // sells FULL amount, no carve
+        assertEq(fxrp.balanceOf(keeper), 0, "keeper took a bounty on an underwater loan");
+        assertEq(pool.principalOut(), 0, "not settled");
+    }
+
+    function test_HealthySettleSwapStillPaysBounty() public {
+        uint256 id = _openFxrp(borrower, 1000e6); // healthy: $2500 vs $1250
+        router.setRate(25, 10);
+        vm.warp(block.timestamp + 7 days + 48 hours + 1);
+        vm.prank(keeper);
+        book.settleSwap(id, address(router), _swapData(950e6), 0);
+        assertEq(fxrp.balanceOf(keeper), 50e6, "healthy-loan bounty missing");
+    }
+
+    function test_ProceedsCeilingRejectsInjection() public {
+        // agent-1 HIGH (disproven as a drain, kept as defense in depth): a router reporting
+        // wildly more stable than the collateral is worth is rejected.
+        uint256 id = _openFxrp(borrower, 1000e6);
+        router.setRate(50, 10); // pays $5.00/FXRP = 2x oracle -> above the 1.5x sane ceiling
+        vm.warp(block.timestamp + 7 days + 48 hours + 1);
+        vm.prank(keeper);
+        vm.expectRevert(LodestarLoanBook.ProceedsTooHigh.selector);
+        book.settleSwap(id, address(router), _swapData(950e6), 0);
+    }
+
+    function test_YieldSkimClampedOnAbnormalRate() public {
+        book.setYieldSkimBps(5000);
+        sflr.mint(borrower, 100_000e18);
+        vm.startPrank(borrower);
+        sflr.approve(address(book), type(uint256).max);
+        uint256 id = book.open(address(sflr), 100_000e18, 0);
+        vm.stopPrank();
+
+        sflrRate.set(5e18); // absurd 5x rate spike (manipulated provider)
+        usdt0.mint(borrower, 40e6);
+        vm.startPrank(borrower);
+        usdt0.approve(address(pool), type(uint256).max);
+        book.repay(id);
+        vm.stopPrank();
+
+        // skim is clamped to a 20%-appreciation basis, not 5x -> borrower keeps the vast majority
+        uint256 cappedRate = uint256(1e18) * 12000 / 10000; // 1.2e18
+        uint256 gain = (100_000e18 * (cappedRate - 1e18)) / cappedRate;
+        uint256 maxSkim = (gain * 5000) / 10_000;
+        assertLe(sflr.balanceOf(reserve), maxSkim, "skim not clamped");
+        assertGt(sflr.balanceOf(borrower), 90_000e18, "borrower over-skimmed");
+    }
+
+    function test_OracleScaledZeroReverts() public {
+        // a feed whose decimals floor the scaled price to zero must revert, not return 0
+        ftso.set(XRP_USD, 5, 30); // value 5 at 30 decimals -> 5 / 10^12 == 0 when scaled to 1e18
+        vm.expectRevert(LodestarOracle.BadPrice.selector);
+        oracle.priceUsd18(address(fxrp));
+    }
+
     function test_ImpairHealthyLoanIsNoOp() public {
         uint256 id = _openFxrp(borrower, 1000e6);
         uint256 assetsBefore = pool.totalAssets();
@@ -416,14 +501,15 @@ contract LodestarTest is Test {
         router.setRate(5, 10); // router pays the crashed $0.50
         uint256 assetsBefore = pool.totalAssets(); // already marked down by 775
         vm.prank(keeper);
-        book.settleSwap(id, address(router), _swapData(950e6), 0);
+        // underwater -> no keeper bounty, so the FULL 1000 FXRP is sold
+        book.settleSwap(id, address(router), _swapData(1000e6), 0);
 
-        // proceeds 475 (950 FXRP * $0.50) -> shortfall 775, buffer covers 10, loss realized 765
+        // proceeds 500 (1000 FXRP * $0.50) -> shortfall 750, buffer covers 10, loss realized 740
         assertEq(pool.impairedLoss(), 0, "impairment cleared at settlement");
         assertEq(book.reserveBalance(), 0, "buffer used as first loss");
-        // mark estimated 475 recovery; settlement realized 475 + 10 cover: pool lands 10 above
-        // the marked level - no cliff, the markdown already told lenders the truth
-        assertEq(pool.totalAssets(), assetsBefore + 10e6, "no settlement cliff");
+        // mark estimated 475 recovery; settlement realized 500 + 10 cover = 510: pool lands 35
+        // above the marked level - a conservative mark, never a downward cliff on lenders
+        assertEq(pool.totalAssets(), assetsBefore + 35e6, "settlement cliff");
         assertEq(pool.principalOut(), 0);
     }
 
