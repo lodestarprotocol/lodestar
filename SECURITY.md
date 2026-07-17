@@ -64,6 +64,43 @@ New improvements shipped (for the next redeploy; live Coston2 runs v1.0):
 - **v1.2 gas:** `Loan` packed to 6 slots (uint128 fields, SafeCast-guarded) → open() ~21k cheaper. `openRate` packs with `active` at no extra slot. Covered by the invariant suite (512k ops) and a `test_YieldSkimRoutesAppreciationToReserve` unit test.
 
 
+## v1.4 — 2026-07-17 (six-agent deep-ocean review + hardening)
+
+A second, deeper adversarial round: six independent agents on non-overlapping surfaces that the
+first three did not frame, each assuming a malicious/creative actor and writing runnable PoCs.
+
+1. **Lifecycle-combination & stale mark-to-market** — impair × rollover × addCollateral × settle races.
+2. **Cross-loan shared global state & MEV** — shared buffer/price-cache/exposure, Dutch-auction ordering.
+3. **Precision / decimals / real-token** — 18dp vs 6dp math, real FAsset FXRP semantics.
+4. **Insolvency & bank-run dynamics** — withdrawal spiral, trapped lenders, buffer adequacy.
+5. **Depeg & oracle basis** — wrapper-vs-underlying, sFLR NAV, USDT0, feed staleness.
+6. **Retroactive governance risk** — every owner param modelled against already-open positions.
+
+**Result: still no external fund-theft or drain.** The precision surface came back fully clean
+(all mixed-decimal math rounds toward the pool; real FXRP is a 1:1 ERC20 with a latent, uninstalled
+FAssets fee facet the balance-delta measurement already handles). The findings were lender-vs-lender
+fairness seams and governance/retroactive risk — the class that actually hurts lending protocols.
+Fixes shipped:
+
+| Finding | Sev | Fix (v1.4) |
+|---------|-----|-----------|
+| Atomic stale-mark skim: deposit→impair(recovered loan)→redeem skims the reversal from lenders | HIGH | `impair` is now a **monotonic high-water mark** — it only ever RAISES the mid-life loss; the reversal happens solely at realization (`_clearImpairment` on repay/buyout/settleSwap). Removes the atomic-reversal primitive. |
+| Phantom solvency: `impair` is permissionless but not mandatory, so an unmarked underwater loan lets an informed lender exit at par | HIGH | `impairMany(ids)` batch so a keeper can mark the whole book in one tx during volatility; `maxWithdraw`/`maxRedeem` now clamp to idle liquidity and the exit path reverts a semantic `InsufficientLiquidity`. (The residual lazy-mark window is inherent to any no-liquidation book; the true backstop is conservative LTV, and the buffer is a fair-weather cushion — see "documented risks".) |
+| `yieldSkimBps`, `gracePeriod`, and the settle curve are read LIVE at the borrower's own repay/settlement, so an owner can retroactively confiscate yield, erase the cure window, or lower the floor under an already-open loan | HIGH | **Snapshot all three into `loanTerms[id]` at open.** Owner setters still change the defaults for NEW loans; existing loans keep the terms they were opened under. A timelock can't protect a borrower who can't exit — this can. |
+| `withdrawReserve` front-run drains the first-loss buffer right before a bad settlement | MED | Settlement-aware guard: the owner can never pull the buffer below the currently-marked expected loss (`pool.impairedLoss`). |
+| Wrapper-vs-underlying basis (sFLR under NAV; FXRP tail depeg) mis-values collateral in LTV/floor/impair | MED | Per-collateral `haircutBps` in the oracle (0 for 1:1 FXRP, non-zero for LSTs) so every risk decision uses realizable value, not par. |
+| `maxStale` up to 1 day allowed borrowing against a stale-high price during a crash | MED | Bound tightened to **≤ 1 hour**; deploy sets FXRP at 15 min (FTSO updates ~90s). |
+| Donated stable strands and breaks the `book stable == reserveBalance` bookkeeping | LOW | `sweepStableDonations` recovers any stable above the tracked buffer. |
+
+Documented (not code-fixable) risks now explicit below: the lazy-mark phantom-solvency window and the
+recommended keeper; the buffer as a ~40bps fair-weather cushion, not a crash backstop (LTV is the real
+one); FXRP's latent FAssets fee facet; USDT0 as the unit of account (lenders bear USDT0, not USD); and
+the exact params that must be timelocked/immutable before mainnet. All verified: **87/87 tests**
+(30 unit + 4 oracle-fuzz + 11 adversarial + 11 v1.4 regressions + 6 core + 9 stress invariants at
+384×400 + 8 econ-games + 4 live-Flare fork). Coston2 v1.4: Book
+`0xa2617dc8d885B84CBC1840a45ab9CFb1aD2773bE`, Pool `0xa07C779abD010fb9483388F9726F354eADA6f93d`,
+Oracle `0xdDcB5cAA9A82e6A3fF4539274fF7e362F6b566a4`.
+
 ## v1.3.2 — 2026-07-17 (three-part adversarial review + hardening)
 
 Three independent adversarial reviews were run against v1.3.1, each on a non-overlapping
@@ -131,14 +168,30 @@ SparkDEX V3.1 router** (`test_fork_SettleSwapThroughRealSparkDEX`).
 | **Tighter bounds** | `addTier` LTV <= 70% (was 90), `keeperBps` <= 10% (was 20), oracle `maxStale` mandatory (0 forbidden, <= 1 day). |
 | **sFLR tier calibration** | Planned 65/60 replaced by 55 (7d) / 45 (30d): FLR does a -30% week ~2x/yr and grinds -8%/month; the old tiers breached in up to 43% of historical 90d windows. |
 
+## Documented risks (by design, disclose to users; not code bugs)
+
+- **Lazy-mark phantom-solvency window.** `impair` is permissionless but not automatic, so between a loan going underwater and someone marking it, the share price overstates realizable value and an informed lender could exit at par ahead of the markdown. Mitigation: `impairMany` + a keeper bot that marks during volatility. The structural backstop is conservative LTV; run a marking keeper at mainnet.
+- **First-loss buffer is a fair-weather cushion (~40 bps of principal), not a crash backstop.** It absorbs small idiosyncratic shortfalls; in a correlated crash it depletes and lenders eat the raw remainder. The real protection is the LTV, not the buffer. Do not market the buffer as crash insurance.
+- **Exit liquidity is idle-balance-bounded and FCFS.** Redemption ≤ `available()`; principal that is lent out cannot be redeemed until it returns. In a run, the slow are temporarily illiquid (correctly priced, not lost). A withdrawal queue / exit fee is a candidate future design.
+- **USDT0 is the unit of account.** "Lenders made whole" means USDT0 units, not dollars; lenders bear USDT0 depeg risk by choosing to lend USDT0. No USDT0/USD feed is wired (candidate: a band-check to pause new borrows on depeg).
+- **FXRP latent fee facet.** Real FXRP can become fee-on-transfer via FAssets governance (not installed today). The balance-delta measurement handles it, but never assume FXRP is a plain ERC20.
+- **LST rate trust.** sFLR/stXRP valuation uses FTSO(underlying) × the provider's on-chain staking rate. Before enabling those tiers, bound the rate-of-change (or use a direct FTSO LST feed if available) and set a per-collateral haircut.
+
 ## Not yet done (blockers before mainnet)
 
-- [ ] Owner → **Gnosis Safe multisig + timelock** on all param setters
-- [ ] Real Flare wiring: FTSOv2 registry address, XRP/USD + FLR/USD feed IDs, Sceptre sFLR rate provider, USDT0 + FXRP token addresses
+- [ ] Owner → **multisig + timelock**, with per-parameter disposition (from the retroactive-param review):
+  - **Immutable / long-timelock:** `oracle.setFeed` (a feed swap is the compromised-key drain vector; existing loans already snapshot their curve/grace/skim, but a feed swap still mis-values NEW opens and the live settlement floor).
+  - **Snapshotted at open (done in v1.4, no timelock needed):** `yieldSkimBps`, `gracePeriod`, settle curve — existing loans are immune to changes.
+  - **Short-timelock:** `withdrawReserve` (now also settlement-aware), `setReserve`, `keeperCapUsd18`, `setRiskParams`, `setRouterAllowed`.
+  - **Hot is acceptable:** `setPaused`, `setMaxUtilization` (cannot trap lenders — redeem isn't gated by it).
+  - Set a **non-zero `exposureCap` at launch** (done in deploy) so a compromised key can't over-borrow unbounded.
+- [ ] Real Flare wiring: FTSOv2 registry, XRP/USD + FLR/USD feed IDs, Sceptre/Firelight rate providers (+ rate-of-change bound + haircut), USDT0 + FXRP token addresses
 - [x] **Fork tests** against live Flare (FTSO reads, real sFLR rate, real SparkDEX settlement)
-- [ ] Optional lender-side yield skim (currently all LST appreciation returns to borrower)
+- [x] Two adversarial review rounds (9 agents total), all findings fixed or documented
+- [ ] Marking keeper for the phantom-solvency window
 - [ ] Per-loan **position NFT** + partial repayment
-- [ ] External audit + invariant/fuzz suite (utilization never > cap; Σ principalOut == Σ active-loan principals; pool solvency)
-- [ ] Reentrancy/■ regression PoCs ported from prior sessions
+- [ ] External audit
+- [ ] Optional: withdrawal queue / exit fee; USDT0 band-check
 
-**Status: v1 scaffold. Not audited. Not deployed. Do not send mainnet funds.**
+**Status: deployed to Coston2 testnet (v1.4). Two internal adversarial rounds complete; no external
+audit yet. Not on mainnet. Do not send mainnet funds.**

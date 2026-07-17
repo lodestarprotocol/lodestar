@@ -44,8 +44,8 @@ contract LodestarForkTest is Test {
 
         oracle = new LodestarOracle(FA.FTSO_V2, owner);
         SceptreRateAdapter rate = new SceptreRateAdapter(FA.SFLR);
-        oracle.setFeed(FA.FXRP, FA.FEED_XRP_USD, address(0), 6 hours);
-        oracle.setFeed(FA.SFLR, FA.FEED_FLR_USD, address(rate), 6 hours);
+        oracle.setFeed(FA.FXRP, FA.FEED_XRP_USD, address(0), 1 hours, 0);
+        oracle.setFeed(FA.SFLR, FA.FEED_FLR_USD, address(rate), 1 hours, 0);
 
         pool = new LodestarPool(IERC20(FA.USDT0), owner);
         book = new LodestarLoanBook(pool, oracle, reserve, owner);
@@ -105,10 +105,13 @@ contract LodestarForkTest is Test {
     /// @dev Short-lived tier + fast Dutch decay so the whole lifecycle stays inside the FTSO
     ///      staleness window while warping (fork timestamps don't refresh the real feed).
     function _prepShortLoan() internal returns (uint256 id, uint256 principal) {
-        book.addTier(FA.FXRP, 5000, 1 hours, 200);
+        // Keep the whole lifecycle inside the 1h FTSO-staleness window: on a frozen fork the real
+        // feed timestamp doesn't advance, so warping past maxStale would read as stale. Short tier
+        // + short grace; decay period stays at its 1h minimum but we settle partway down the curve.
+        book.addTier(FA.FXRP, 5000, 10 minutes, 200);
         uint256 shortTier = book.tierCount(FA.FXRP) - 1;
-        book.setRiskParams(1 hours, 500, 500, 2000); // 1h grace
-        book.setSettleCurve(10_000, 8_500, 1 hours); // full decay in 1h
+        book.setRiskParams(10 minutes, 500, 500, 2000); // 10-min grace
+        book.setSettleCurve(10_000, 8_500, 1 hours); // 100->85% over 1h (min allowed period)
 
         uint256 sUnit = 10 ** IERC20Metadata(FA.USDT0).decimals();
         _fund(FA.USDT0, USDT0_WHALE, lender, 100_000 * sUnit);
@@ -130,7 +133,7 @@ contract LodestarForkTest is Test {
         (uint256 id,) = _prepShortLoan();
         address buyer = address(0xB1D);
 
-        vm.warp(block.timestamp + 2 hours + 30 minutes); // past due (1h) + grace (1h), mid-decay
+        vm.warp(block.timestamp + 30 minutes); // past due (10m) + grace (10m), ~10m into decay
         assertTrue(book.isDefaulted(id), "defaulted");
 
         uint256 cost = book.buyoutCost(id);
@@ -151,8 +154,8 @@ contract LodestarForkTest is Test {
         (uint256 id, uint256 principal) = _prepShortLoan();
         book.setRouterAllowed(SPARKDEX_V31_ROUTER, true);
 
-        vm.warp(block.timestamp + 3 hours + 1); // due 1h + grace 1h + full 1h decay -> 85% floor
-        assertEq(book.currentFloorBps(id), 8_500, "floor fully decayed");
+        vm.warp(block.timestamp + 50 minutes); // default at 20m, 30m into the 1h decay -> 92.5%
+        assertEq(book.currentFloorBps(id), 9_250, "unexpected partial-decay floor");
 
         // keeper sells collateral minus the 5% bounty through the LIVE SparkDEX V3.1 pool
         uint256 toSell = 1000e6 - 50e6;

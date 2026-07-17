@@ -98,10 +98,27 @@ contract LodestarPool is ERC4626, Ownable, ReentrancyGuard {
         IERC20(asset()).safeTransfer(to, amount);
     }
 
-    /// @dev Reentrancy guards on the lender entrypoints. Defense in depth: with a standard
-    ///      non-hooking stable (USDT0) these are unreachable, but if an exotic collateral is
-    ///      ever whitelisted its in-kind transfer during settlement can't re-enter to redeem
-    ///      against a transiently-inflated share price.
+    /// @dev Exit liquidity is bounded by idle balance: principal that is lent out cannot be
+    ///      redeemed until it returns (repay/settlement). Clamp maxWithdraw/maxRedeem to what is
+    ///      actually available so integrators and UIs never size an exit that reverts, and so the
+    ///      revert (when a caller ignores the clamp) is the pool's own semantic error.
+    function maxWithdraw(address owner_) public view override returns (uint256) {
+        uint256 assets = super.maxWithdraw(owner_); // marked share value
+        uint256 avail = available();
+        return assets < avail ? assets : avail;
+    }
+
+    function maxRedeem(address owner_) public view override returns (uint256) {
+        uint256 shares = super.maxRedeem(owner_);
+        uint256 availShares = convertToShares(available());
+        return shares < availShares ? shares : availShares;
+    }
+
+    /// @dev All four ERC4626 mutators carry `nonReentrant` (defense in depth: a hookable
+    ///      collateral transferred in-kind during settlement can't re-enter to redeem against a
+    ///      transiently-inflated share price), and the withdraw path additionally enforces the
+    ///      idle-liquidity bound with a semantic `InsufficientLiquidity` rather than a raw
+    ///      ERC20 underflow.
     function deposit(uint256 assets, address receiver) public override nonReentrant returns (uint256) {
         return super.deposit(assets, receiver);
     }
@@ -111,10 +128,12 @@ contract LodestarPool is ERC4626, Ownable, ReentrancyGuard {
     }
 
     function withdraw(uint256 assets, address receiver, address owner_) public override nonReentrant returns (uint256) {
+        if (assets > available()) revert InsufficientLiquidity();
         return super.withdraw(assets, receiver, owner_);
     }
 
     function redeem(uint256 shares, address receiver, address owner_) public override nonReentrant returns (uint256) {
+        if (previewRedeem(shares) > available()) revert InsufficientLiquidity();
         return super.redeem(shares, receiver, owner_);
     }
 

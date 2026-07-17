@@ -296,7 +296,7 @@ contract LodestarStress is StdInvariant, Test {
         ftso.set(XRP, 250_000_000, 8); // $2.50
 
         oracle = new LodestarOracle(address(ftso), address(this));
-        oracle.setFeed(address(fxrp), XRP, address(0), 1 days);
+        oracle.setFeed(address(fxrp), XRP, address(0), 1 hours, 0);
 
         pool = new LodestarPool(IERC20(address(stable)), address(this));
         book = new LodestarLoanBook(pool, oracle, address(this), address(this));

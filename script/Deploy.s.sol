@@ -22,7 +22,8 @@ contract Deploy is Script {
         vm.startBroadcast(deployer);
 
         LodestarOracle oracle = new LodestarOracle(FTSO, deployer);
-        oracle.setFeed(FXRP, FEED_XRP, address(0), 6 hours);
+        // FXRP is 1:1 XRP-backed (FAssets), so no haircut; 15-min staleness bound (FTSO ~90s).
+        oracle.setFeed(FXRP, FEED_XRP, address(0), 15 minutes, 0);
 
         LodestarPool pool = new LodestarPool(IERC20(USDT0), deployer);
         LodestarLoanBook book = new LodestarLoanBook(pool, oracle, deployer, deployer);
@@ -47,7 +48,7 @@ contract Deploy is Script {
 
         vm.stopBroadcast();
 
-        console.log("=== Lodestar v1.3 deployed to Coston2 (114) ===");
+        console.log("=== Lodestar v1.4 deployed to Coston2 (114) ===");
         console.log("LodestarOracle  ", address(oracle));
         console.log("LodestarPool    ", address(pool));
         console.log("LodestarLoanBook", address(book));
