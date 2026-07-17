@@ -611,21 +611,22 @@ $("amt").addEventListener('input',preview);$("lamt").addEventListener('input',pr
 function setTx(id,v){const el=$(id);if(el)el.textContent=v;}
 async function loadChain(){
   try{const p=new ethers.JsonRpcProvider(RPC);const blk=await p.getBlockNumber();setTx("netblock","#"+blk);
-    const f=new ethers.Contract(FTSO,FTSO_ABI,p),pool=new ethers.Contract(POOL,POOL_ABI,p),book=new ethers.Contract(BOOK,BOOK_ABI,p);
-    const [xrp,flr,ta,po,ts,loanCount]=await Promise.all([f.getFeedById(FEED_XRP),f.getFeedById(FEED_FLR),pool.totalAssets(),pool.principalOut(),pool.totalSupply(),book.activeLoanCount()]);
+    const f=new ethers.Contract(FTSO,FTSO_ABI,p),pool=new ethers.Contract(POOL,POOL_ABI,p);
+    // CORE pool stats — these must always render (independent of the secondary count queries)
+    const [xrp,flr,ta,po,ts]=await Promise.all([f.getFeedById(FEED_XRP),f.getFeedById(FEED_FLR),pool.totalAssets(),pool.principalOut(),pool.totalSupply()]);
     const px=v=>Number(v.value)/10**Number(v.decimals);
-    // FXRP priced by FTSO XRP/USD; sFLR/stXRP approx on testnet (rate providers are mainnet-only)
     MK.FXRP.price=px(xrp);MK.STXRP.price=px(xrp);MK.SFLR.price=px(flr);
     for(const k of Object.keys(MK)){const el=$("px-"+k);if(el)el.textContent=priceUsd(MK[k].price);}
-    // real on-chain pool stats (USD₮0, 6dp)
-    const tvl=Number(ta)/1e6, borrowed=Number(po)/1e6, util=tvl>0?100*borrowed/tvl:0, loans=Number(loanCount);
+    const tvl=Number(ta)/1e6, borrowed=Number(po)/1e6, util=tvl>0?100*borrowed/tvl:0;
     const sp=Number(ts)>0?(Number(ta)/1e6)/(Number(ts)/1e12):1;
     setTx("d-tvl",usd(tvl));setTx("d-borrowed",usd(borrowed));setTx("d-util",util.toFixed(1)+"% utilization");
-    setTx("d-loans",String(loans));setTx("d-borrowers",String(loans));            // real active loans / borrowers
     setTx("l-tvl",usd(tvl));setTx("l-util",util.toFixed(1)+"%");setTx("l-sp",sp.toLocaleString('en-US',{minimumFractionDigits:4,maximumFractionDigits:4}));
     preview();
-    // lenders = unique depositors from Deposit events (async, non-blocking; Coston2 allows wide getLogs)
-    countLenders(pool,blk).then(n=>{const v=String(n||(tvl>0?1:0));setTx("d-lenders",v);setTx("l-lenders",v);});
+    // SECONDARY counts — isolated so a failure here can never blank the pool display
+    (async()=>{
+      try{const book=new ethers.Contract(BOOK,BOOK_ABI,p);const loans=Number(await book.activeLoanCount());setTx("d-loans",String(loans));setTx("d-borrowers",String(loans));}catch(_){}
+      try{const n=await countLenders(pool,blk);const v=String(n||(tvl>0?1:0));setTx("d-lenders",v);setTx("l-lenders",v);}catch(_){}
+    })();
   }catch(e){setTx("netblock","offline");console.error(e);}
 }
 async function countLenders(pool,head){
