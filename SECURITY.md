@@ -83,9 +83,7 @@ on-chain = 28M):
   exit, (2) bounded per-withdraw gas, and (3) unbounded concurrent-loan scale. v1.5/1.6 chose (1)+(2)
   and bounds (3) with the cap. A future version could paginate the sweep to lift the scale ceiling.
 
-**95/95 tests.** v1.6 is code-complete and committed; the Coston2 redeploy is pending faucet C2FLR
-(the deploy wallet was drained by same-day redeploys). The live testnet deployment remains v1.5
-(addresses below) until v1.6 is redeployed.
+**95/95 tests.** Coston2 v1.6 (deployed 2026-07-17): Book `0x4Ca4a3a8e14d2e2F1aa29EF7904E8e0Eb7359c47`, Pool `0xe7D4a03f1814F3e5A3A485f2fe16EB5DC1097B8b`, Oracle `0x4302410FE3B1Cf99199086453C013783C5a6Bd4c`. (v1.7 stateless-impairment rework evaluated and REJECTED: it underflows `totalAssets` after settling a deeply-underwater loan; v1.6 per-loan marks give clean close-time reversal. v1.6 is the mainnet-final impairment design; truly-unbounded scale would need a bucketed accumulator as a separate audited v2.)
 
 ## v1.5 — 2026-07-17 (phantom-solvency closed on-chain)
 
