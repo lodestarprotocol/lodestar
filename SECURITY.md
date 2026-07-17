@@ -64,6 +64,29 @@ New improvements shipped (for the next redeploy; live Coston2 runs v1.0):
 - **v1.2 gas:** `Loan` packed to 6 slots (uint128 fields, SafeCast-guarded) → open() ~21k cheaper. `openRate` packs with `active` at no extra slot. Covered by the invariant suite (512k ops) and a `test_YieldSkimRoutesAppreciationToReserve` unit test.
 
 
+## v1.6 — 2026-07-17 (sweep gas hardening + slot-DoS priced out)
+
+Adversarial review of the v1.5 sweep itself (measured, not assumed — Flare block gas limit read
+on-chain = 28M):
+- **Sweep gas:** healthy book ~2.4k gas/loan; worst case (mass crash, every loan underwater, every
+  mark writes) ~25k gas/loan. At the old 500 cap that is ~13M gas per withdraw and the setter
+  allowed 5000 (~130M, un-mineable) → a mass crash could brick withdrawals. **Fixed:** the sweep now
+  batches a single `pool.impair` across the whole pass (one pool write, not N), the default cap is
+  **300** (~7.5M worst case, 27% of a block) and the setter is capped at **400**. Verified in
+  `test/security/LodestarSweepGas.t.sol`.
+- **Slot-exhaustion DoS (new, from the cap's side effect):** an attacker can open dust loans up to
+  `maxActiveLoans` and block all new borrows (`open` reverts `TooManyActiveLoans`). At a $10
+  `minPrincipal` that costs ~$6k of locked capital. **Mitigation:** set a meaningful `minPrincipal`
+  on mainnet (e.g. $100), which makes filling the cap cost real, locked capital (300 slots ≈ $60k+).
+  Owner-tunable up to $1000. Regression `test_SlotExhaustionRequiresRealCapital`.
+- **Design note (honest):** there is an inherent trilemma between (1) an always-fresh share price at
+  exit, (2) bounded per-withdraw gas, and (3) unbounded concurrent-loan scale. v1.5/1.6 chose (1)+(2)
+  and bounds (3) with the cap. A future version could paginate the sweep to lift the scale ceiling.
+
+**95/95 tests.** v1.6 is code-complete and committed; the Coston2 redeploy is pending faucet C2FLR
+(the deploy wallet was drained by same-day redeploys). The live testnet deployment remains v1.5
+(addresses below) until v1.6 is redeployed.
+
 ## v1.5 — 2026-07-17 (phantom-solvency closed on-chain)
 
 The one item v1.4 left as "documented, run a keeper" is now fixed in the contract. The lazy-mark

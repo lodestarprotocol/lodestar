@@ -113,7 +113,10 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
 
     uint256[] public activeLoanIds; // every open loan, for the withdraw-time impairment sweep
     mapping(uint256 => uint256) private _activeIdx; // 1-based index into activeLoanIds; 0 = not active
-    uint32 public maxActiveLoans = 500; // bounds syncImpairment so a withdraw can never be gas-bricked
+    // Bounds the withdraw-time impairment sweep so a mass-crash sweep (worst case ~20k gas/loan,
+    // all marks writing) stays well under Flare's ~28M block gas limit and can never brick a
+    // withdrawal. 300 loans ≈ 6M gas worst case; the setter is capped at 400 for headroom.
+    uint32 public maxActiveLoans = 300;
 
     mapping(address => uint256) private _unitCache; // 10**decimals per collateral
 
@@ -225,7 +228,8 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     ///         redemption can never be gas-bricked. Raise it only as far as the sweep stays
     ///         comfortably under the block gas limit for this chain.
     function setMaxActiveLoans(uint32 n) external onlyOwner {
-        if (n < 50 || n > 5000) revert BadParam();
+        // Upper bound keeps the worst-case mass-crash sweep safely under the block gas limit.
+        if (n < 50 || n > 400) revert BadParam();
         maxActiveLoans = n;
     }
 
@@ -482,7 +486,8 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         // not depend on a live oracle to close the exit window.
         uint256 price18 = _livePriceOrCache(loans[id].collateral);
         if (price18 == 0) revert OracleDown();
-        _markAtPrice(id, price18);
+        uint256 delta = _markLoanRaise(id, price18);
+        if (delta > 0) pool.impair(delta);
     }
 
     /// @notice Sweep the whole active book, marking every underwater loan's expected loss into
@@ -503,6 +508,7 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         address[] memory cAddr = new address[](n);
         uint256[] memory cPrice = new uint256[](n);
         uint256 cLen;
+        uint256 totalDelta;
         for (uint256 i; i < n; i++) {
             uint256 id = activeLoanIds[i];
             address coll = loans[id].collateral;
@@ -521,8 +527,9 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
                 cPrice[cLen] = price18;
                 cLen++;
             }
-            if (price18 != 0) _markAtPrice(id, price18);
+            if (price18 != 0) totalDelta += _markLoanRaise(id, price18);
         }
+        if (totalDelta > 0) pool.impair(totalDelta); // one pool write for the whole sweep
     }
 
     /// @dev Live oracle price (refreshing the cache) or the last-good cached price if FTSO reverts.
@@ -539,17 +546,19 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     }
 
     /// @dev Raise-only high-water mark of a loan's expected loss at a given whole-token price.
+    ///      Updates the loan's stored loss and RETURNS the pool-impairment delta so the caller can
+    ///      batch a single `pool.impair` across a whole sweep (one pool write instead of N).
     ///      Mid-life impairment may only RAISE the recognized loss; the reversal happens solely at
     ///      close (`_clearImpairment`). A mid-life DOWNWARD re-mark would let an attacker atomically
     ///      deposit -> impair(a recovered loan) -> redeem and skim the reversal. Conservative
     ///      accounting: recognize early, reverse only at realization.
-    function _markAtPrice(uint256 id, uint256 price18) internal {
+    function _markLoanRaise(uint256 id, uint256 price18) internal returns (uint256 delta) {
         Loan storage L = loans[id];
         uint256 valStable = _usd18ToStable((price18 * L.collAmount) / _unit(L.collateral));
         uint256 est = (valStable * (10_000 - keeperBps)) / 10_000;
         uint256 newLoss = est >= L.principal ? 0 : L.principal - est;
         if (newLoss > L.impairedLoss) {
-            pool.impair(newLoss - uint256(L.impairedLoss));
+            delta = newLoss - uint256(L.impairedLoss);
             L.impairedLoss = newLoss.toUint128();
             emit LoanImpaired(id, newLoss);
         }

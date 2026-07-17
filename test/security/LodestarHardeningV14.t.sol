@@ -140,6 +140,42 @@ contract LodestarHardeningV14Test is Test {
         assertGt(id, 0);
     }
 
+    // ---- v1.6: loan-slot-exhaustion DoS is priced out by a meaningful minPrincipal -----------
+    function test_SlotExhaustionRequiresRealCapital() public {
+        // With a mainnet-grade minPrincipal, filling the loan cap costs real, locked capital.
+        book.setMaxActiveLoans(50); // small cap for a fast test
+        book.setMinPrincipal(uint128(100e6)); // $100 min loan (mainnet-style, not the $10 testnet)
+        // a $100 principal at 50% LTV needs $200 collateral = 80 FXRP; filling 50 slots = $10k locked
+        uint256 fxrpNeeded = 80e6;
+        for (uint256 i; i < 50; i++) {
+            address b = address(uint160(0xDEAD00 + i));
+            fxrp.mint(b, fxrpNeeded);
+            vm.startPrank(b);
+            fxrp.approve(address(book), type(uint256).max);
+            book.open(address(fxrp), fxrpNeeded, 0);
+            vm.stopPrank();
+        }
+        assertEq(book.activeLoanCount(), 50, "cap not reached");
+        // the 51st open is blocked (the DoS state) — but it cost the griefer $10k of locked FXRP
+        fxrp.mint(borrower, fxrpNeeded);
+        vm.startPrank(borrower);
+        fxrp.approve(address(book), type(uint256).max);
+        vm.expectRevert(LodestarLoanBook.TooManyActiveLoans.selector);
+        book.open(address(fxrp), fxrpNeeded, 0);
+        vm.stopPrank();
+        // custody proves the capital is genuinely locked (50 * 80 FXRP), i.e. the attack has a cost
+        assertEq(fxrp.balanceOf(address(book)), 50 * fxrpNeeded, "griefer capital not locked");
+    }
+
+    function test_MaxActiveLoansSetterBounded() public {
+        vm.expectRevert(LodestarLoanBook.BadParam.selector);
+        book.setMaxActiveLoans(401); // above the block-gas-safe ceiling
+        vm.expectRevert(LodestarLoanBook.BadParam.selector);
+        book.setMaxActiveLoans(49); // below floor
+        book.setMaxActiveLoans(400); // exactly at the safe max is fine
+        assertEq(book.maxActiveLoans(), 400);
+    }
+
     // ---- Fix 2: phantom-solvency window is closable in one batch call ------------------------
     function test_ImpairManyBatchMarksWholeBook() public {
         uint256 a = _openFxrp(borrower, 1000e6);
