@@ -107,18 +107,40 @@ contract DeployMainnet is Script {
 
         book.setMinPrincipal(MIN_PRINCIPAL);
 
-        // ---- tiers + exposure caps (conservative; <=70% LTV hard ceiling) ----
+        // ---- tiers + exposure caps ----
+        // TIERS ARE APPEND-ONLY AND IMMUTABLE: addTier can never be edited or removed, and a
+        // borrower may always pick any tier by index, so every LTV/fee below is a permanent
+        // commitment. They are chosen conservatively for that reason.
+        //
+        // Ladder (index order = ascending duration): 7d / 14d / 30d / 90d.
+        //   - LTV DECREASES with duration: a longer term is a longer-dated put, so its tail
+        //     drawdown is larger and it must run at lower leverage. (XRP 50->40, sFLR 45->35,
+        //     stXRP 40->30 across the ladder; all <= the 70% hard ceiling, LST < FXRP.)
+        //   - Fee is per-term. The 14d fee interpolates 7d<->30d. The 90d fee is set to ~3x the
+        //     30d fee ON PURPOSE: reaching 90 days by rolling 30d loans costs ~3 fees AND
+        //     re-checks LTV at each roll (rollover reverts Undercollateralized unless cured),
+        //     whereas a single 90d loan locks the open-time LTV for the full term with NO
+        //     mid-term re-qualification. Pricing the 90d tier at >= the rollover cost keeps it
+        //     from undercutting the safer, self-correcting rollover path, and its lowest-in-ladder
+        //     LTV compensates for the absent mid-term health check.
+        // fee bps: 200=2% (7d) | 250=2.5% (14d) | 350=3.5% (30d) | 1050=10.5% (90d, ~3x the 30d)
         book.addTier(FXRP, 5000, 7 days, 200); // 50% / 7d / 2%
+        book.addTier(FXRP, 4800, 14 days, 250); // 48% / 14d / 2.5%
         book.addTier(FXRP, 4500, 30 days, 350); // 45% / 30d / 3.5%
+        book.addTier(FXRP, 4000, 90 days, 1050); // 40% / 90d / 10.5% (no mid-term recheck -> lowest LTV)
         book.setExposureCap(FXRP, CAP_LAUNCH_USD18);
         if (SFLR != address(0)) {
-            book.addTier(SFLR, 4500, 7 days, 200);
-            book.addTier(SFLR, 4000, 30 days, 350);
+            book.addTier(SFLR, 4500, 7 days, 200); // 45% / 7d / 2%
+            book.addTier(SFLR, 4300, 14 days, 250); // 43% / 14d / 2.5%
+            book.addTier(SFLR, 4000, 30 days, 350); // 40% / 30d / 3.5%
+            book.addTier(SFLR, 3500, 90 days, 1050); // 35% / 90d / 10.5%
             book.setExposureCap(SFLR, CAP_LAUNCH_USD18);
         }
         if (STXRP != address(0)) {
-            book.addTier(STXRP, 4000, 7 days, 200); // lower LTV than sFLR/FXRP for the newer vault
-            book.addTier(STXRP, 3500, 30 days, 350);
+            book.addTier(STXRP, 4000, 7 days, 200); // 40% / 7d / 2% (lower LTV: newer Firelight vault)
+            book.addTier(STXRP, 3800, 14 days, 250); // 38% / 14d / 2.5%
+            book.addTier(STXRP, 3500, 30 days, 350); // 35% / 30d / 3.5%
+            book.addTier(STXRP, 3000, 90 days, 1050); // 30% / 90d / 10.5%
             book.setExposureCap(STXRP, CAP_LAUNCH_USD18 / 4); // smaller launch cap for stXRP
         }
 
