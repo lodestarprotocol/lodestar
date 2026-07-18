@@ -10,6 +10,12 @@ import {SceptreRateAdapter} from "../src/flare/SceptreRateAdapter.sol";
 import {FirelightRateAdapter} from "../src/flare/FirelightRateAdapter.sol";
 import {FlareAddresses as FA} from "../src/flare/FlareAddresses.sol";
 
+/// @dev Flare's canonical, address-stable contract registry (same on Flare/Songbird/Coston(2)).
+///      Used to resolve the CURRENT FtsoV2 at deploy time instead of trusting a hardcoded constant.
+interface IFlareContractRegistry {
+    function getContractAddressByName(string calldata name) external view returns (address);
+}
+
 /// @notice Deploys Lodestar to FLARE MAINNET (chainId 14). Ownership is left with the deployer so
 ///         the wiring can be verified on-chain, THEN handed to the multisig via TransferOwnership.s.sol.
 ///
@@ -22,9 +28,12 @@ import {FlareAddresses as FA} from "../src/flare/FlareAddresses.sol";
 /// reverts if a required address is left at address(0). VERIFY each against official sources first.
 contract DeployMainnet is Script {
     // All addresses come from the canonical, on-chain-verified src/flare/FlareAddresses.sol (single
-    // source of truth). Re-verify FtsoV2 against the ContractRegistry at deploy time in case Flare
-    // rotates the contract.
-    address constant FTSO = FA.FTSO_V2;
+    // source of truth). FtsoV2 is NOT taken from the constant directly: it is resolved from the
+    // FlareContractRegistry at deploy time (see run()) and cross-checked against this audited value,
+    // so a stale constant or a Flare rotation can never silently point the immutable oracle at the
+    // wrong contract — the deploy halts for human review instead.
+    address constant REGISTRY = 0xaD67FE66660Fb8dFE9d6b1b4240d8650e30F6019; // address-stable on all Flare nets
+    address constant FTSO_EXPECTED = FA.FTSO_V2; // audited/reviewed FtsoV2; must equal the live registry value
     address constant USDT0 = FA.USDT0; // 6dp pool asset
     address constant FXRP = FA.FXRP; // 6dp, = AssetManagerFXRP.fAsset()
 
@@ -58,15 +67,22 @@ contract DeployMainnet is Script {
     uint256 constant CAP_LAUNCH_USD18 = 200_000e18; // start small per collateral; raise as confidence grows
 
     function run() external {
-        require(FTSO != address(0), "set FTSO");
         require(USDT0 != address(0), "set USDT0");
         require(FXRP != address(0), "set FXRP");
+
+        // Resolve the CURRENT FtsoV2 from the registry and cross-check it against the audited value.
+        // The oracle's ftso is immutable, so wiring a wrong/rotated address is unrecoverable. If the
+        // live registry value ever differs from what was reviewed (FTSO_EXPECTED), HALT — never
+        // silently deploy against an FtsoV2 whose interface hasn't been re-verified.
+        address ftso = IFlareContractRegistry(REGISTRY).getContractAddressByName("FtsoV2");
+        require(ftso != address(0), "FtsoV2 not in registry (wrong chain/registry?)");
+        require(ftso == FTSO_EXPECTED, "FtsoV2 drift: registry != audited FA.FTSO_V2 -- re-verify before deploy");
 
         address deployer = vm.envAddress("DEPLOYER");
         vm.startBroadcast(deployer);
 
         // ---- oracle + feeds ----
-        LodestarOracle oracle = new LodestarOracle(FTSO, deployer);
+        LodestarOracle oracle = new LodestarOracle(ftso, deployer);
         oracle.setFeed(FXRP, FEED_XRP, address(0), MAX_STALE, 0); // FXRP 1:1, no rate provider, no haircut
         if (SFLR != address(0)) {
             // sFLR speaks getPooledFlrByShares, not underlyingPerShare -> deploy a thin, immutable,
@@ -121,6 +137,7 @@ contract DeployMainnet is Script {
         vm.stopBroadcast();
 
         console.log("=== Lodestar deployed to Flare MAINNET (14) ===");
+        console.log("FtsoV2 (registry-resolved)", ftso);
         console.log("LodestarOracle  ", address(oracle));
         console.log("LodestarPool    ", address(pool));
         console.log("LodestarLoanBook", address(book));
