@@ -1,0 +1,13 @@
+# Security headers on every response
+/*
+  Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: geolocation=(), microphone=(), camera=(), payment=()
+  Cross-Origin-Opener-Policy: same-origin-allow-popups
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://coston2-api.flare.network https://rpc.ankr.com https://coston2.enosys.global wss:; frame-src 'self'; base-uri 'self'; form-action 'self'; object-src 'none'
+
+# Hashed assets are immutable → cache hard for a year
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
