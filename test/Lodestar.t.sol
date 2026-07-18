@@ -80,6 +80,24 @@ contract SkimmingRouter {
     }
 }
 
+/// @dev Malicious whitelisted router: uses settleSwap's arbitrary calldata to TRY to exfiltrate the
+///      book's stable (reserve buffer) and more collateral than approved. Must take nothing.
+contract EvilRouter {
+    address public immutable attacker;
+
+    constructor(address _a) {
+        attacker = _a;
+    }
+
+    function exfil(address stable, address collateral, address book, uint256 toSell) external {
+        // no stable allowance is ever granted -> reverts, swallowed
+        try IERC20(stable).transferFrom(book, attacker, type(uint256).max) {} catch {}
+        // collateral allowance is exactly `toSell` -> pulling more reverts, swallowed
+        try IERC20(collateral).transferFrom(book, attacker, toSell * 2) {} catch {}
+        // deliberately do NOT complete the approved swap
+    }
+}
+
 contract MockRate is ILstRateProvider {
     uint256 public rate = 1e18;
 
@@ -465,6 +483,32 @@ contract LodestarTest is Test {
         book.impair(id);
         assertEq(pool.impairedLoss(), 0, "healthy loan marked a loss");
         assertGt(book.lastPrice18(address(fxrp)), 0, "price not cached");
+    }
+
+    // Defense-in-depth (completeness-critic recommendation): the arbitrary settleSwap router
+    // calldata cannot exfiltrate the reserve buffer or another loan's collateral.
+    function test_MaliciousRouterCannotExfilBufferOrOtherCollateral() public {
+        address atk = address(0xE711);
+        EvilRouter evil = new EvilRouter(atk);
+        book.setRouterAllowed(address(evil), true);
+
+        uint256 id1 = _openFxrp(borrower, 1000e6); // loan to settle
+        _openFxrp(address(0xB0B2), 500e6); // a SECOND loan whose 500 FXRP sits in the book
+        uint256 bookStableBefore = usdt0.balanceOf(address(book)); // reserve buffer from fee cuts
+        uint256 bookCollBefore = fxrp.balanceOf(address(book));
+        assertGt(bookStableBefore, 0, "reserve buffer present");
+
+        vm.warp(block.timestamp + 7 days + 48 hours + 1);
+        bytes memory data =
+            abi.encodeCall(EvilRouter.exfil, (address(usdt0), address(fxrp), address(book), 950e6));
+        vm.prank(keeper);
+        vm.expectRevert(LodestarLoanBook.SwapIncomplete.selector); // no collateral actually left -> reverts
+        book.settleSwap(id1, address(evil), data, 0);
+
+        assertEq(usdt0.balanceOf(atk), 0, "attacker exfiltrated stable");
+        assertEq(fxrp.balanceOf(atk), 0, "attacker exfiltrated collateral");
+        assertEq(usdt0.balanceOf(address(book)), bookStableBefore, "reserve buffer touched");
+        assertEq(fxrp.balanceOf(address(book)), bookCollBefore, "other loan's collateral touched");
     }
 
     function test_UnderwaterSettleSwapPaysNoBounty() public {
