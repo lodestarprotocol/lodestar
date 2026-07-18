@@ -376,7 +376,7 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
             <div class="ph"><h3>Borrow USD₮0</h3><span class="tag">no health factor</span></div>
             <div class="pb">
               <div class="seg" id="collSeg"><button class="on" data-c="FXRP"><img src="assets/fxrp.png" class="segic">FXRP</button><button data-c="STXRP"><img src="assets/stxrp.png" class="segic">stXRP</button><button data-c="SFLR"><img src="assets/sflr.png" class="segic">sFLR</button></div>
-              <div class="fld"><label>Collateral to lock <span class="bal">Balance <b id="balFXRP">—</b><button class="maxbtn" onclick="fillAmt('amt','FXRP',1)">MAX</button><button class="maxbtn" onclick="fillAmt('amt','FXRP',0.5)">50%</button></span></label><div class="inp"><input id="amt" type="number" value="1000" min="0"/><span class="u" id="collTag">FXRP</span></div></div>
+              <div class="fld"><label>Collateral to lock <span class="bal">Balance <b id="balFXRP">—</b><button class="maxbtn" onclick="maxColl(1)">MAX</button><button class="maxbtn" onclick="maxColl(0.5)">50%</button></span></label><div class="inp"><input id="amt" type="number" value="1000" min="0"/><span class="u" id="collTag">FXRP</span></div></div>
               <div class="fauc">No test FXRP yet? Claim it (plus C2FLR gas) from the <a href="https://faucet.flare.network/coston2" target="_blank" rel="noopener">official Flare faucet ↗</a></div>
               <div class="fld"><label>Term</label><div class="terms" id="terms"></div></div>
               <div class="preview">
@@ -563,7 +563,8 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
 
 <script>
 // ---- Coston2 testnet (chainId 114), live deployment ----
-const RPCS=["https://coston2-api.flare.network/ext/C/rpc","https://rpc.ankr.com/flare_coston2","https://coston2.enosys.global/ext/C/rpc"];
+// Enosys first — coston2-api.flare.network intermittently 429s and breaks wallet gas-estimation ("missing revert data").
+const RPCS=["https://coston2.enosys.global/ext/C/rpc","https://rpc.ankr.com/flare_coston2","https://coston2-api.flare.network/ext/C/rpc"];
 const RPC=RPCS[0];
 const CHAIN_HEX="0x72", CHAIN_NAME="Flare Testnet Coston2";
 const FTSO="0xC4e9c78EA53db782E28f28Fdf80BaF59336B304d";
@@ -656,7 +657,7 @@ function rows(){
 window.goBorrow=k=>{document.querySelectorAll('#collSeg button').forEach(b=>b.classList.toggle('on',b.dataset.c===k));setColl(k);location.hash="#borrow";};
 function terms(){const m=MK[COLL];$("terms").innerHTML=m.tiers.map((t,i)=>`<div class="term ${i===TIER?'on':''}" onclick="pickTier(${i})"><b>${t.n}</b><small>${t.d} days · ${t.fee}% fee</small><div class="ltv">up to ${t.ltv}% LTV</div></div>`).join("");}
 window.pickTier=i=>{TIER=i;terms();preview();};
-function setColl(k){COLL=k;TIER=0;$("collTag").textContent=MK[k].name;terms();preview();}
+function setColl(k){COLL=k;TIER=0;$("collTag").textContent=MK[k].name;terms();preview();showCollBal();}
 function preview(){const m=MK[COLL],t=m.tiers[TIER],a=parseFloat($("amt").value)||0;const val=a*m.price,pr=val*t.ltv/100,fee=pr*t.fee/100,due=new Date(Date.now()+t.d*864e5);
   $("q-recv").textContent=usd(pr-fee);$("q-fee").textContent=usd(fee);$("q-repay").textContent=usd(pr);
   $("q-due").textContent=due.toLocaleDateString('en-US',{month:"short",day:"numeric",year:"numeric"});
@@ -763,7 +764,7 @@ async function connectWith(eip, eager){
     if(!accts || !accts.length){ if(!eager) toast("No account available in this wallet.","err"); return; }
     if(!eager){
       try{ await eip.request({method:"wallet_switchEthereumChain",params:[{chainId:CHAIN_HEX}]}); }
-      catch(e){ if(e.code===4902||(""+e).toLowerCase().includes("unrecognized")){ try{ await eip.request({method:"wallet_addEthereumChain",params:[{chainId:CHAIN_HEX,chainName:CHAIN_NAME,nativeCurrency:{name:"Coston2 Flare",symbol:"C2FLR",decimals:18},rpcUrls:[RPC],blockExplorerUrls:["https://coston2-explorer.flare.network"]}]}); }catch(_){}} }
+      catch(e){ if(e.code===4902||(""+e).toLowerCase().includes("unrecognized")){ try{ await eip.request({method:"wallet_addEthereumChain",params:[{chainId:CHAIN_HEX,chainName:CHAIN_NAME,nativeCurrency:{name:"Coston2 Flare",symbol:"C2FLR",decimals:18},rpcUrls:RPCS,blockExplorerUrls:["https://coston2-explorer.flare.network"]}]}); }catch(_){}} }
     }
     currentEip=eip;
     bp=new ethers.BrowserProvider(eip); signer=await bp.getSigner(); account=await signer.getAddress();
@@ -792,7 +793,10 @@ function tryEager(){
   if(w) connectWith(w.provider,true);
   else if(window.ethereum) connectWith(window.ethereum,true);
 }
-function showBal(){ setTx("balFXRP",(Number(BAL.FXRP)/1e6).toLocaleString('en-US',{maximumFractionDigits:2})); setTx("balUSDT0",(Number(BAL.USDT0)/1e6).toLocaleString('en-US',{maximumFractionDigits:2})); }
+// borrow-panel balance is collateral-aware: only FXRP is a real Coston2 token; stXRP/sFLR ("Soon") have no testnet token → show "—", never the FXRP balance
+function showCollBal(){ const el=$("balFXRP"); if(!el) return; el.textContent = !account ? "—" : (COLL==="FXRP" ? (Number(BAL.FXRP)/1e6).toLocaleString('en-US',{maximumFractionDigits:2}) : "—"); }
+window.maxColl=(frac)=>{ if(COLL!=="FXRP") return; fillAmt('amt','FXRP',frac); };
+function showBal(){ showCollBal(); setTx("balUSDT0",(Number(BAL.USDT0)/1e6).toLocaleString('en-US',{maximumFractionDigits:2})); }
 async function fetchBalances(){
   if(!account) return;
   // show cached balances instantly so the field never sits on "—"
@@ -809,6 +813,11 @@ $("connect").onclick=openWalletPicker;
 const C=(a,abi)=>new ethers.Contract(a,abi,signer);
 const u6=v=>BigInt(Math.floor((parseFloat(v)||0)*1e6));
 const errMsg=e=>e.shortMessage||e.reason||(e.info&&e.info.error&&e.info.error.message)||e.message||(""+e);
+// map transient testnet-RPC failures (429 / no revert data) to a clear, actionable message
+function friendlyErr(e){ const m=(errMsg(e)||"").toLowerCase();
+  if(m.includes("missing revert data")||m.includes("429")||m.includes("too many")||m.includes("failed to fetch")||m.includes("timeout")||m.includes("could not coalesce")||(e&&(e.code==="SERVER_ERROR"||e.code==="TIMEOUT"||e.code==="NETWORK_ERROR")))
+    return "Testnet RPC was busy for a moment. Please try again in a few seconds. (If it keeps happening, switch your wallet's Coston2 RPC to https://coston2.enosys.global/ext/C/rpc)";
+  return errMsg(e); }
 function busy(b,t){b.disabled=true;b.dataset.t=b.textContent;b.textContent=t;}
 function unbusy(b,t){b.disabled=false;b.textContent=t||b.dataset.t;}
 window.doBorrow=async()=>{
@@ -822,7 +831,7 @@ window.doBorrow=async()=>{
     if(await tok.allowance(account,BOOK)<amt){ busy(btn,"Approving FXRP…"); await (await tok.approve(BOOK,amt)).wait(); }
     busy(btn,"Borrowing…"); await (await book.open(FXRP_ADDR,amt,BigInt(TIER))).wait();
     unbusy(btn,"Borrow"); toast("Borrow complete. USD₮0 is in your wallet.","ok"); refreshAll();
-  }catch(e){ unbusy(btn,"Borrow"); console.error(e); toast("Borrow failed: "+errMsg(e),"err"); }
+  }catch(e){ unbusy(btn,"Borrow"); console.error(e); toast("Borrow failed: "+friendlyErr(e),"err"); }
 };
 window.doDeposit=async()=>{
   if(!account) return openWalletPicker();
@@ -834,7 +843,7 @@ window.doDeposit=async()=>{
     if(await tok.allowance(account,POOL)<amt){ busy(btn,"Approving USD₮0…"); await (await tok.approve(POOL,amt)).wait(); }
     busy(btn,"Supplying…"); await (await pool.deposit(amt,account)).wait();
     unbusy(btn,"Supply USD₮0"); toast("Deposit complete. You're now earning.","ok"); refreshAll();
-  }catch(e){ unbusy(btn,"Supply USD₮0"); console.error(e); toast("Deposit failed: "+errMsg(e),"err"); }
+  }catch(e){ unbusy(btn,"Supply USD₮0"); console.error(e); toast("Deposit failed: "+friendlyErr(e),"err"); }
 };
 window.doRepay=async(id,due)=>{
   if(!account) return openWalletPicker();
@@ -844,7 +853,7 @@ window.doRepay=async(id,due)=>{
     if(await tok.allowance(account,POOL)<need){ toast("Approve USD₮0…"); await (await tok.approve(POOL,need)).wait(); }
     toast("Repaying…"); await (await book.repay(BigInt(id))).wait();
     toast("Repaid. Your collateral is back in your wallet.","ok"); refreshAll();
-  }catch(e){ console.error(e); toast("Repay failed: "+errMsg(e),"err"); }
+  }catch(e){ console.error(e); toast("Repay failed: "+friendlyErr(e),"err"); }
 };
 window.togglePartial=(id)=>{ const p=$("prp-"+id); if(!p) return; const open=p.style.display!=="none"; p.style.display=open?"none":"flex"; if(!open){ const i=$("pr-"+id); if(i) i.focus(); } };
 window.doPartial=async(id,principalStr)=>{
@@ -861,7 +870,7 @@ window.doPartial=async(id,principalStr)=>{
     if(await tok.allowance(account,POOL)<amt){ toast("Approve USD₮0…"); await (await tok.approve(POOL,amt)).wait(); }
     toast("Paying down…"); await (await book.partialRepay(BigInt(id),amt,0n,0n,0n)).wait();
     toast("Paid down. Your debt is lower and your collateral stays locked until you repay in full.","ok"); refreshAll();
-  }catch(e){ console.error(e); toast("Pay-down failed: "+errMsg(e),"err"); }
+  }catch(e){ console.error(e); toast("Pay-down failed: "+friendlyErr(e),"err"); }
 };
 window.doWithdraw=async()=>{
   if(!account) return;
