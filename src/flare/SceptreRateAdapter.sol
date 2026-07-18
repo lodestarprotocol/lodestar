@@ -14,6 +14,7 @@ contract SceptreRateAdapter is ILstRateProvider {
     ISceptre public immutable sflr;
 
     constructor(address _sflr) {
+        require(_sflr != address(0), "sflr=0");
         sflr = ISceptre(_sflr);
     }
 

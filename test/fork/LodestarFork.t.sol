@@ -8,7 +8,22 @@ import {LodestarOracle} from "../../src/LodestarOracle.sol";
 import {LodestarPool} from "../../src/LodestarPool.sol";
 import {LodestarLoanBook} from "../../src/LodestarLoanBook.sol";
 import {SceptreRateAdapter} from "../../src/flare/SceptreRateAdapter.sol";
+import {FirelightRateAdapter} from "../../src/flare/FirelightRateAdapter.sol";
 import {FlareAddresses as FA} from "../../src/flare/FlareAddresses.sol";
+
+/// @dev SparkDEX V4 (Algebra) router multi-hop entrypoint. Same selector as UniV3 exactInput
+///      (0xc04b8d59); the path packs a 20-byte deployer (0 = base pools) between tokens.
+interface IAlgebraRouter {
+    struct ExactInputParams {
+        bytes path;
+        address recipient;
+        uint256 deadline;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut);
+}
 
 /// @dev SparkDEX V3.1 (UniswapV3-fork) periphery, verified on Flare mainnet.
 interface ISwapRouterV3 {
@@ -40,7 +55,9 @@ contract LodestarForkTest is Test {
     address borrower = address(0xB0B);
 
     function setUp() public {
-        vm.createSelectFork("https://flare-api.flare.network/ext/C/rpc");
+        // FORK_RPC lets us point at our own un-rate-limited node for heavy multi-hop swap tests
+        // (the public RPC 429s on Algebra 2-hop tick traversal). Defaults to the public endpoint.
+        vm.createSelectFork(vm.envOr("FORK_RPC", string("https://flare-api.flare.network/ext/C/rpc")));
 
         oracle = new LodestarOracle(FA.FTSO_V2, owner);
         SceptreRateAdapter rate = new SceptreRateAdapter(FA.SFLR);
@@ -186,5 +203,126 @@ contract LodestarForkTest is Test {
         (,,,,,,,, bool active,,) = book.loans(id);
         assertFalse(active, "loan closed");
         emit log_named_decimal_uint("principal repaid via SparkDEX", principal, 6);
+    }
+
+    // sFLR (18dp) full lifecycle on REAL mainnet state, settled via BUYOUT (the always-available path,
+    // no DEX dependency). sFLR ALSO has deep swap liquidity (sFLR/WFLR ~$1.05M on SparkDEX V4, so the
+    // keeper's swap route works too), but buyout is the cleanest thing to prove on a fork. Funded from
+    // a real sFLR holder (the SparkDEX sFLR/WFLR pool).
+    address constant SFLR_HOLDER = 0x9A3215f8B0d128816F75175c9fD74e7ebbD987DA;
+
+    function test_fork_SflrSettlesViaBuyoutOnMainnetState() public {
+        // short sFLR tier so the whole lifecycle stays inside the 1h FTSO staleness window on a frozen fork
+        book.addTier(FA.SFLR, 5000, 10 minutes, 200);
+        uint256 shortTier = book.tierCount(FA.SFLR) - 1;
+        book.setRiskParams(10 minutes, 500, 500, 2000);
+        book.setSettleCurve(10_000, 8_500, 1 hours);
+
+        uint256 sUnit = 10 ** IERC20Metadata(FA.USDT0).decimals();
+        _fund(FA.USDT0, USDT0_WHALE, lender, 50_000 * sUnit);
+        vm.startPrank(lender);
+        IERC20(FA.USDT0).approve(address(pool), type(uint256).max);
+        pool.deposit(50_000 * sUnit, lender);
+        vm.stopPrank();
+
+        uint256 collAmt = 20_000e18; // ~$236 of sFLR
+        _fund(FA.SFLR, SFLR_HOLDER, borrower, collAmt);
+        vm.startPrank(borrower);
+        IERC20(FA.SFLR).approve(address(book), type(uint256).max);
+        uint256 id = book.open(FA.SFLR, collAmt, shortTier);
+        vm.stopPrank();
+        (,,, uint256 principal,,,,,,,) = book.loans(id);
+        assertGt(principal, 0, "sFLR loan opened on mainnet state");
+
+        vm.warp(block.timestamp + 30 minutes); // past due (10m) + grace (10m)
+        assertTrue(book.isDefaulted(id), "sFLR defaulted");
+
+        address buyer = address(0xB2D);
+        uint256 cost = book.buyoutCost(id);
+        _fund(FA.USDT0, USDT0_WHALE, buyer, cost);
+        uint256 poolBefore = pool.totalAssets();
+        vm.startPrank(buyer);
+        IERC20(FA.USDT0).approve(address(book), cost);
+        book.buyout(id, cost);
+        vm.stopPrank();
+
+        assertEq(IERC20(FA.SFLR).balanceOf(buyer), collAmt, "buyer received real sFLR");
+        assertEq(pool.principalOut(), 0, "sFLR principal cleared");
+        assertGe(pool.totalAssets(), poolBefore, "lenders whole on real sFLR buyout");
+        emit log_named_decimal_uint("sFLR buyout cost USDT0", cost, 6);
+    }
+
+    // stXRP (6dp) settled by the keeper's REAL route: SparkDEX V4 (Algebra) 2-hop stXRP->FXRP->USD₮0,
+    // against the live ~$5.8M stXRP/FXRP pool. Proves the deep DEX path + the FirelightRateAdapter
+    // pricing + the Algebra multi-hop calldata all work on real mainnet state. Funded from the pool.
+    address constant SPARKDEX_V4 = 0x69D57B9D705eaD73a5d2f2476C30c55bD755cc2F;
+    address constant STXRP_HOLDER = 0x2a91D9296ee2fe4139b49c7071b2f29f59a9f9aE; // SparkDEX V4 stXRP/FXRP pool
+
+    function test_fork_StxrpSettleSwapThroughSparkDexV4() public {
+        // The Algebra 2-hop swap reads deep pool tick state: it 429s on the public RPC and needs an
+        // archival/own-node fork run STANDALONE (a pruned node loses the fork block's state during the
+        // long full suite). Opt in explicitly:  HEAVY_FORK=1 FORK_RPC=<node> forge test --match-test stXRP
+        if (bytes(vm.envOr("HEAVY_FORK", string(""))).length == 0) {
+            emit log("skip: set HEAVY_FORK=1 + FORK_RPC=<archival node> to run the stXRP Algebra 2-hop settle test");
+            return;
+        }
+        FirelightRateAdapter rate = new FirelightRateAdapter(FA.STXRP);
+        oracle.setFeed(FA.STXRP, FA.FEED_XRP_USD, address(rate), 1 hours, 300);
+        book.addTier(FA.STXRP, 5000, 10 minutes, 200);
+        uint256 tier = book.tierCount(FA.STXRP) - 1;
+        book.setRiskParams(10 minutes, 500, 500, 2000);
+        book.setSettleCurve(10_000, 8_500, 1 hours);
+        book.setRouterAllowed(SPARKDEX_V4, true);
+
+        _fund(FA.USDT0, USDT0_WHALE, lender, 100_000e6);
+        vm.startPrank(lender);
+        IERC20(FA.USDT0).approve(address(pool), type(uint256).max);
+        pool.deposit(100_000e6, lender);
+        vm.stopPrank();
+
+        uint256 collAmt = 10_000e6; // ~10k stXRP (~$10.5k), <1% of the pool -> low slippage
+        _fund(FA.STXRP, STXRP_HOLDER, borrower, collAmt);
+        vm.startPrank(borrower);
+        IERC20(FA.STXRP).approve(address(book), type(uint256).max);
+        uint256 id = book.open(FA.STXRP, collAmt, tier);
+        vm.stopPrank();
+        (,,, uint256 principal,,,,,,,) = book.loans(id);
+
+        vm.warp(block.timestamp + 50 minutes); // default at 20m, 30m into the 1h decay (floor ~92.5%)
+        assertTrue(book.isDefaulted(id), "stXRP defaulted");
+
+        // replicate the contract's bounty so amountIn == the contract's toSell (else SwapIncomplete)
+        uint256 p18 = oracle.priceUsd18(FA.STXRP);
+        uint256 bounty = (collAmt * book.keeperBps()) / 10_000;
+        uint256 cap = (uint256(book.keeperCapUsd18()) * 1e6) / p18; // stXRP unit = 1e6
+        if (bounty > cap) bounty = cap;
+        uint256 toSell = collAmt - bounty;
+
+        // Algebra 2-hop path stXRP -> FXRP -> USD₮0 (20-byte deployer=0 between tokens)
+        bytes memory path = abi.encodePacked(FA.STXRP, bytes20(0), FA.FXRP, bytes20(0), FA.USDT0);
+        bytes memory swapData = abi.encodeCall(
+            IAlgebraRouter.exactInput,
+            (
+                IAlgebraRouter.ExactInputParams({
+                    path: path,
+                    recipient: address(book),
+                    deadline: block.timestamp,
+                    amountIn: toSell,
+                    amountOutMinimum: 0
+                })
+            )
+        );
+
+        address keeper = address(0xCafE);
+        uint256 poolBefore = pool.totalAssets();
+        vm.prank(keeper);
+        book.settleSwap(id, SPARKDEX_V4, swapData, 0);
+
+        assertEq(IERC20(FA.STXRP).balanceOf(keeper), bounty, "stXRP keeper bounty in-kind");
+        assertEq(pool.principalOut(), 0, "principal cleared via SparkDEX V4 Algebra 2-hop");
+        assertGe(pool.totalAssets(), poolBefore, "lenders whole through the real stXRP/FXRP pool");
+        (,,,,,,,, bool active,,) = book.loans(id);
+        assertFalse(active, "loan closed");
+        emit log_named_decimal_uint("stXRP principal repaid via SparkDEX V4", principal, 6);
     }
 }

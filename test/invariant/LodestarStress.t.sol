@@ -119,6 +119,27 @@ contract StressHandler is Test {
         vm.stopPrank();
     }
 
+    /// Pay down part of a loan and, half the time, try to pull some collateral. try/catch absorbs
+    /// infeasible params (dust remainder, over-LTV release, defaulted release) so the fuzzer keeps
+    /// churning valid partial repays into the mix.
+    function partialRepayLoan(uint256 idSeed, uint256 rSeed, uint256 cSeed, uint256 tierSeed, uint256 payerSeed)
+        public
+    {
+        if (ids.length == 0) return;
+        uint256 id = ids[idSeed % ids.length];
+        if (!_active(id)) return;
+        (,, uint256 collAmount, uint256 principal,,,,,,,) = book.loans(id);
+        if (principal <= 1 || collAmount == 0) return;
+        uint256 r = bound(rSeed, 1, principal); // >= principal / dust remainder revert -> caught
+        uint256 c = (cSeed % 2 == 0) ? 0 : bound(cSeed, 1, collAmount);
+        address a = _actor(payerSeed);
+        stable.mint(a, r);
+        vm.startPrank(a);
+        stable.approve(address(pool), r);
+        try book.partialRepay(id, r, c, tierSeed % 2, 0) {} catch {}
+        vm.stopPrank();
+    }
+
     // ------------------------------------------------------------- default handling
     /// impair any loan (healthy, underwater, mid-term or defaulted) — permissionless.
     function impairLoan(uint256 idSeed) public {
