@@ -41,10 +41,12 @@ contract DeployMainnet is Script {
     // sFLR exposes getPooledFlrByShares, NOT underlyingPerShare, so leave SFLR_RATE at 0 and the
     // script deploys a SceptreRateAdapter for it. Override only if you have a bespoke provider.
     address constant SFLR_RATE = address(0);
-    // stXRP = Firelight stXRP (FA.STXRP): verified, adapter fork-proven, DEEP settlement (stXRP/FXRP
-    // ~$5.8M SparkDEX V4 + ~$3M Enosys) and settlement fork-proven via SparkDEX V4 2-hop. ENABLED with
-    // conservative params (STXRP_HAIRCUT + STXRP_CAP below) given Firelight is a newer protocol.
-    address constant STXRP = FA.STXRP;
+    // stXRP = Firelight stXRP (FA.STXRP): adapter fork-proven, DEEP settlement (stXRP/FXRP ~$5.8M
+    // SparkDEX V4 + ~$3M Enosys). ON HOLD FOR LAUNCH: Kinetic (the only live Flare venue with an
+    // opinion) assigns stXRP a 0% collateral factor — a strong "riskier than FXRP" signal for a
+    // newer liquid-staked-XRP wrapper. Launch FXRP + sFLR first; RE-ENABLE later by setting this
+    // back to FA.STXRP (feed/adapter/tiers/cap below are all ready and gated on STXRP != 0).
+    address constant STXRP = address(0);
     address constant STXRP_RATE = address(0); // 0 -> the script deploys a FirelightRateAdapter
 
     // Whitelisted routers for settleSwap. settleSwap only grants a bounded collateral allowance and
@@ -109,38 +111,34 @@ contract DeployMainnet is Script {
 
         // ---- tiers + exposure caps ----
         // TIERS ARE APPEND-ONLY AND IMMUTABLE: addTier can never be edited or removed, and a
-        // borrower may always pick any tier by index, so every LTV/fee below is a permanent
-        // commitment. They are chosen conservatively for that reason.
+        // borrower may always pick any tier by index, so every LTV/fee below is a PERMANENT
+        // commitment. Launch is deliberately LEAN: two tiers per collateral (Standard 7d,
+        // Extended 30d) — matching the dapp UI. 14d and 90d were evaluated and DEFERRED (append
+        // them later if demand shows; 90d especially wants a richer term-premium fee and has no
+        // mid-term LTV re-check, so it's not a launch tier).
         //
-        // Ladder (index order = ascending duration): 7d / 14d / 30d / 90d.
-        //   - LTV DECREASES with duration: a longer term is a longer-dated put, so its tail
-        //     drawdown is larger and it must run at lower leverage. (XRP 50->40, sFLR 45->35,
-        //     stXRP 40->30 across the ladder; all <= the 70% hard ceiling, LST < FXRP.)
-        //   - Fee is per-term. The 14d fee interpolates 7d<->30d. The 90d fee is set to ~3x the
-        //     30d fee ON PURPOSE: reaching 90 days by rolling 30d loans costs ~3 fees AND
-        //     re-checks LTV at each roll (rollover reverts Undercollateralized unless cured),
-        //     whereas a single 90d loan locks the open-time LTV for the full term with NO
-        //     mid-term re-qualification. Pricing the 90d tier at >= the rollover cost keeps it
-        //     from undercutting the safer, self-correcting rollover path, and its lowest-in-ladder
-        //     LTV compensates for the absent mid-term health check.
-        // fee bps: 200=2% (7d) | 250=2.5% (14d) | 350=3.5% (30d) | 1050=10.5% (90d, ~3x the 30d)
+        // Calibration is verified, not assumed:
+        //   - LTVs benchmarked live: Kinetic gives FXRP 70% WITH liquidation -> our 50% no-liq
+        //     max sits correctly below; MoreMarkets borrows XRP at 50% even with liquidation;
+        //     Myso's no-liq volatile range is 50-75% (we're at the floor); Aave puts volatile
+        //     assets at 35-40%. LST (sFLR) ranked below FXRP.
+        //   - Fees vs 8yr XRP / 3.5yr FLR drawdowns: expected loss per term is 0.05% (7d) /
+        //     0.19% (30d); the 2% / 3.5% fees over-cover it ~18-42x. Also CHEAPER than Myso's
+        //     realized no-liq deals (their 30d ~85-104% APY vs our ~43%), so borrower-competitive.
+        // fee bps: 200 = 2% (7d) | 350 = 3.5% (30d)
         book.addTier(FXRP, 5000, 7 days, 200); // 50% / 7d / 2%
-        book.addTier(FXRP, 4800, 14 days, 250); // 48% / 14d / 2.5%
         book.addTier(FXRP, 4500, 30 days, 350); // 45% / 30d / 3.5%
-        book.addTier(FXRP, 4000, 90 days, 1050); // 40% / 90d / 10.5% (no mid-term recheck -> lowest LTV)
         book.setExposureCap(FXRP, CAP_LAUNCH_USD18);
         if (SFLR != address(0)) {
-            book.addTier(SFLR, 4500, 7 days, 200); // 45% / 7d / 2%
-            book.addTier(SFLR, 4300, 14 days, 250); // 43% / 14d / 2.5%
+            book.addTier(SFLR, 4500, 7 days, 200); // 45% / 7d / 2% (LST < FXRP)
             book.addTier(SFLR, 4000, 30 days, 350); // 40% / 30d / 3.5%
-            book.addTier(SFLR, 3500, 90 days, 1050); // 35% / 90d / 10.5%
             book.setExposureCap(SFLR, CAP_LAUNCH_USD18);
         }
+        // stXRP is ON HOLD for launch (STXRP == address(0) above -> this block is skipped). When
+        // re-enabled, it launches lower than FXRP/sFLR (newer vault) with a quarter-size cap.
         if (STXRP != address(0)) {
-            book.addTier(STXRP, 4000, 7 days, 200); // 40% / 7d / 2% (lower LTV: newer Firelight vault)
-            book.addTier(STXRP, 3800, 14 days, 250); // 38% / 14d / 2.5%
+            book.addTier(STXRP, 4000, 7 days, 200); // 40% / 7d / 2%
             book.addTier(STXRP, 3500, 30 days, 350); // 35% / 30d / 3.5%
-            book.addTier(STXRP, 3000, 90 days, 1050); // 30% / 90d / 10.5%
             book.setExposureCap(STXRP, CAP_LAUNCH_USD18 / 4); // smaller launch cap for stXRP
         }
 
