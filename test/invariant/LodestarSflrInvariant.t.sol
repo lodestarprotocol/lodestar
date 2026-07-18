@@ -7,27 +7,40 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {LodestarOracle} from "../../src/LodestarOracle.sol";
 import {LodestarPool} from "../../src/LodestarPool.sol";
 import {LodestarLoanBook} from "../../src/LodestarLoanBook.sol";
-import {MockERC20, MockFtsoV2, MockRouter} from "../Lodestar.t.sol";
+import {MockERC20, MockFtsoV2, MockRouter, MockRate} from "../Lodestar.t.sol";
 
-/// @dev Randomised actor that pounds the protocol from every entrypoint.
-contract Handler is Test {
+/// @dev Fuzz handler for an 18-decimal LST collateral (sFLR). Mirrors the FXRP invariant handler but
+///      exercises the 18dp path — open, impair, both settlement routes, partial repay, price crashes —
+///      with correct 18dp bounty/units, so the launch collateral's decimal handling is fuzzed, not
+///      just unit-tested. Stable (USD₮0) is 6dp; sFLR is 18dp.
+contract SflrHandler is Test {
     LodestarLoanBook book;
     LodestarPool pool;
+    LodestarOracle oracle;
     MockERC20 stable;
-    MockERC20 fxrp;
+    MockERC20 sflr;
     MockFtsoV2 ftso;
     MockRouter router;
-    bytes21 constant XRP = bytes21("XRP/USD");
+    bytes21 constant FLR = bytes21("FLR/USD");
 
     uint256[] public ids;
     address[] public actors;
     uint256 public ghostSettled;
 
-    constructor(LodestarLoanBook _b, LodestarPool _p, MockERC20 _s, MockERC20 _f, MockFtsoV2 _ft, MockRouter _r) {
+    constructor(
+        LodestarLoanBook _b,
+        LodestarPool _p,
+        LodestarOracle _o,
+        MockERC20 _s,
+        MockERC20 _sflr,
+        MockFtsoV2 _ft,
+        MockRouter _r
+    ) {
         book = _b;
         pool = _p;
+        oracle = _o;
         stable = _s;
-        fxrp = _f;
+        sflr = _sflr;
         ftso = _ft;
         router = _r;
         actors.push(address(0xA11));
@@ -44,12 +57,12 @@ contract Handler is Test {
     }
 
     function openLoan(uint256 collAmt, uint256 actorSeed, uint256 tierSeed) public {
-        collAmt = bound(collAmt, 1e6, 5_000e6);
+        collAmt = bound(collAmt, 1_000e18, 5_000_000e18); // 18dp sFLR
         address a = _actor(actorSeed);
-        fxrp.mint(a, collAmt);
+        sflr.mint(a, collAmt);
         vm.startPrank(a);
-        fxrp.approve(address(book), collAmt);
-        try book.open(address(fxrp), collAmt, tierSeed % 2) returns (uint256 id) {
+        sflr.approve(address(book), collAmt);
+        try book.open(address(sflr), collAmt, tierSeed % 2) returns (uint256 id) {
             ids.push(id);
         } catch {}
         vm.stopPrank();
@@ -68,33 +81,6 @@ contract Handler is Test {
         vm.stopPrank();
     }
 
-    function addCollateral(uint256 idSeed, uint256 amt, uint256 payerSeed) public {
-        if (ids.length == 0) return;
-        uint256 id = ids[idSeed % ids.length];
-        (,,,,,,,, bool active,,) = book.loans(id);
-        if (!active) return;
-        amt = bound(amt, 1e6, 1_000e6);
-        address a = _actor(payerSeed);
-        fxrp.mint(a, amt);
-        vm.startPrank(a);
-        fxrp.approve(address(book), amt);
-        try book.addCollateral(id, amt) {} catch {}
-        vm.stopPrank();
-    }
-
-    function rolloverLoan(uint256 idSeed, uint256 tierSeed, uint256 payerSeed) public {
-        if (ids.length == 0) return;
-        uint256 id = ids[idSeed % ids.length];
-        (,,, uint256 principal,,,,, bool active,,) = book.loans(id);
-        if (!active) return;
-        address a = _actor(payerSeed);
-        stable.mint(a, principal); // more than any fee
-        vm.startPrank(a);
-        stable.approve(address(pool), principal);
-        try book.rollover(id, tierSeed % 2) {} catch {}
-        vm.stopPrank();
-    }
-
     function partialRepayLoan(uint256 idSeed, uint256 rSeed, uint256 cSeed, uint256 tierSeed, uint256 payerSeed)
         public
     {
@@ -102,13 +88,27 @@ contract Handler is Test {
         uint256 id = ids[idSeed % ids.length];
         (,, uint256 collAmount, uint256 principal,,,,, bool active,,) = book.loans(id);
         if (!active || principal <= 1 || collAmount == 0) return;
-        uint256 r = bound(rSeed, 1, principal); // infeasible amounts revert -> caught below
+        uint256 r = bound(rSeed, 1, principal);
         uint256 c = (cSeed % 2 == 0) ? 0 : bound(cSeed, 1, collAmount);
         address a = _actor(payerSeed);
         stable.mint(a, r);
         vm.startPrank(a);
         stable.approve(address(pool), r);
         try book.partialRepay(id, r, c, tierSeed % 2, 0) {} catch {}
+        vm.stopPrank();
+    }
+
+    function addCollateral(uint256 idSeed, uint256 amt, uint256 payerSeed) public {
+        if (ids.length == 0) return;
+        uint256 id = ids[idSeed % ids.length];
+        (,,,,,,,, bool active,,) = book.loans(id);
+        if (!active) return;
+        amt = bound(amt, 1e18, 100_000e18);
+        address a = _actor(payerSeed);
+        sflr.mint(a, amt);
+        vm.startPrank(a);
+        sflr.approve(address(book), amt);
+        try book.addCollateral(id, amt) {} catch {}
         vm.stopPrank();
     }
 
@@ -120,19 +120,27 @@ contract Handler is Test {
     function settleViaSwap(uint256 idSeed) public {
         if (ids.length == 0) return;
         uint256 id = ids[idSeed % ids.length];
-        (, address coll, uint256 collAmount,,,,, uint64 dueAt, bool active,,) = book.loans(id);
+        (,, uint256 collAmount, uint256 principal,,,, uint64 dueAt, bool active,,) = book.loans(id);
         if (!active) return;
         vm.warp(uint256(dueAt) + 48 hours + 1);
-        router.setRate(25, 10); // generous fill so any floor level clears
-        // reproduce the book's bounty math so the swap takes exactly the sale amount
-        uint256 bounty = (collAmount * book.keeperBps()) / 10_000;
-        uint256 p18 = book.lastPrice18(coll);
-        if (p18 != 0) {
-            uint256 capTokens = (uint256(book.keeperCapUsd18()) * 1e6) / p18;
-            if (bounty > capTokens) bounty = capTokens;
+        uint256 p18;
+        try oracle.priceUsd18(address(sflr)) returns (uint256 p) {
+            p18 = p;
+        } catch {
+            return;
         }
+        if (p18 == 0) return;
+        // dynamic fair rate: out = ~1.1x the oracle value of amountIn -> clears the Dutch floor and
+        // stays under the 1.5x sane-proceeds ceiling, at whatever the current price is.
+        router.setRate(11 * p18, 1e31);
+        // replicate the contract's 18dp bounty so `collAmount - bounty` == the contract's toSell.
+        uint256 bounty = (collAmount * book.keeperBps()) / 10_000;
+        uint256 capTokens = (uint256(book.keeperCapUsd18()) * 1e18) / p18; // 1e18 = sFLR unit
+        if (bounty > capTokens) bounty = capTokens;
+        uint256 collValStable = ((p18 * collAmount) / 1e18) * 1e6 / 1e18; // usd18 -> stable(6dp)
+        if (collValStable < principal) bounty = 0; // underwater -> contract pays no bounty
         address[] memory path = new address[](2);
-        path[0] = coll;
+        path[0] = address(sflr);
         path[1] = address(stable);
         bytes memory data = abi.encodeCall(
             MockRouter.swapExactTokensForTokens, (collAmount - bounty, 0, path, address(book), block.timestamp)
@@ -183,30 +191,32 @@ contract Handler is Test {
         vm.stopPrank();
     }
 
-    function movePrice(uint256 p) public {
-        ftso.set(XRP, bound(p, 1e7, 1e11), 8); // XRP $0.10 .. $1000
+    function movePriceFlr(uint256 p) public {
+        ftso.set(FLR, bound(p, 1e5, 1e8), 8); // FLR $0.001 .. $1 (never 0)
     }
 }
 
-contract LodestarInvariant is StdInvariant, Test {
+contract LodestarSflrInvariant is StdInvariant, Test {
     LodestarLoanBook book;
     LodestarPool pool;
+    LodestarOracle oracle;
     MockERC20 stable;
-    MockERC20 fxrp;
+    MockERC20 sflr;
+    MockRate sflrRate;
     MockFtsoV2 ftso;
     MockRouter router;
-    LodestarOracle oracle;
-    Handler h;
-    bytes21 constant XRP = bytes21("XRP/USD");
+    SflrHandler h;
+    bytes21 constant FLR = bytes21("FLR/USD");
 
     function setUp() public {
         stable = new MockERC20("USDT0", "USDT0", 6);
-        fxrp = new MockERC20("FXRP", "FXRP", 6);
+        sflr = new MockERC20("Staked FLR", "sFLR", 18);
         ftso = new MockFtsoV2();
-        ftso.set(XRP, 250_000_000, 8); // $2.50
+        ftso.set(FLR, 2_000_000, 8); // $0.02
+        sflrRate = new MockRate(); // 1 sFLR = 1 FLR
 
         oracle = new LodestarOracle(address(ftso), address(this));
-        oracle.setFeed(address(fxrp), XRP, address(0), 1 hours, 0);
+        oracle.setFeed(address(sflr), FLR, address(sflrRate), 1 hours, 300); // 3% haircut
 
         pool = new LodestarPool(IERC20(address(stable)), address(this));
         book = new LodestarLoanBook(pool, oracle, address(this), address(this));
@@ -214,84 +224,71 @@ contract LodestarInvariant is StdInvariant, Test {
 
         router = new MockRouter();
         book.setRouterAllowed(address(router), true);
-        book.addTier(address(fxrp), 5000, 7 days, 200);
-        book.addTier(address(fxrp), 4500, 30 days, 350);
+        book.addTier(address(sflr), 4500, 7 days, 200);
+        book.addTier(address(sflr), 4000, 30 days, 350);
 
         stable.mint(address(this), 1_000_000e6);
         stable.approve(address(pool), type(uint256).max);
         pool.deposit(1_000_000e6, address(this));
-        stable.mint(address(router), 100_000_000e6); // settlement liquidity
+        stable.mint(address(router), 100_000_000e6);
 
-        h = new Handler(book, pool, stable, fxrp, ftso, router);
+        h = new SflrHandler(book, pool, oracle, stable, sflr, ftso, router);
         targetContract(address(h));
     }
 
-    /// principalOut always equals the sum of active-loan principals.
-    function invariant_principalOutMatchesLoans() public view {
+    function invariant_sflr_principalOutMatchesLoans() public view {
         uint256 sum;
         uint256 n = h.idsLength();
         for (uint256 i; i < n; i++) {
             (,,, uint256 principal,,,,, bool active,,) = book.loans(h.ids(i));
             if (active) sum += principal;
         }
-        assertEq(sum, pool.principalOut(), "principalOut drift");
+        assertEq(sum, pool.principalOut(), "principalOut drift (18dp)");
     }
 
-    /// The loan book custodies exactly the collateral of active loans (nothing stuck, nothing missing).
-    function invariant_collateralCustody() public view {
+    function invariant_sflr_collateralCustody() public view {
         uint256 sum;
         uint256 n = h.idsLength();
         for (uint256 i; i < n; i++) {
             (,, uint256 collAmount,,,,,, bool active,,) = book.loans(h.ids(i));
             if (active) sum += collAmount;
         }
-        assertEq(fxrp.balanceOf(address(book)), sum, "collateral custody drift");
+        assertEq(sflr.balanceOf(address(book)), sum, "18dp collateral custody drift");
     }
 
-    /// Recorded USD exposure per collateral equals the sum of active-loan USD principals.
-    function invariant_exposureMatches() public view {
+    function invariant_sflr_exposureMatches() public view {
         uint256 sum;
         uint256 n = h.idsLength();
         for (uint256 i; i < n; i++) {
             (,,,,, uint256 pUsd,,, bool active,,) = book.loans(h.ids(i));
             if (active) sum += pUsd;
         }
-        assertEq(book.exposureUsd18(address(fxrp)), sum, "exposure drift");
+        assertEq(book.exposureUsd18(address(sflr)), sum, "18dp exposure drift");
     }
 
-    /// No active loan can exist below the minimum principal (dust guard holds under fuzzing).
-    function invariant_noDustPrincipal() public view {
+    function invariant_sflr_noDustPrincipal() public view {
         uint256 n = h.idsLength();
         for (uint256 i; i < n; i++) {
             (,,, uint256 principal,,,,, bool active,,) = book.loans(h.ids(i));
-            if (active) assertGe(principal, book.minPrincipal(), "dust-principal active loan");
+            if (active) assertGe(principal, book.minPrincipal(), "dust-principal active loan (18dp)");
         }
     }
 
-    /// The stable balance the book holds is exactly its first-loss buffer.
-    function invariant_bookStableIsReserveBuffer() public view {
-        assertEq(stable.balanceOf(address(book)), book.reserveBalance(), "stable stranded or missing in book");
+    function invariant_sflr_bookStableIsReserveBuffer() public view {
+        assertEq(stable.balanceOf(address(book)), book.reserveBalance(), "stable stranded/missing (18dp)");
     }
 
-    /// The active-loan sweep set exactly equals the set of active loans (no ghost/missing ids).
-    function invariant_activeArrayMatchesLoans() public view {
+    function invariant_sflr_activeArrayMatchesLoans() public view {
         uint256 active;
         uint256 n = h.idsLength();
         for (uint256 i; i < n; i++) {
             (,,,,,,,, bool a,,) = book.loans(h.ids(i));
             if (a) active++;
         }
-        assertEq(book.activeLoanCount(), active, "activeLoanIds drift vs active loans");
+        assertEq(book.activeLoanCount(), active, "activeLoanIds drift (18dp)");
     }
 
-    /// The pool's aggregate markdown equals the sum of active per-loan marks.
-    function invariant_impairmentMatchesLoans() public view {
-        uint256 sum;
-        uint256 n = h.idsLength();
-        for (uint256 i; i < n; i++) {
-            (,,,,,,,, bool active,, uint256 marked) = book.loans(h.ids(i));
-            if (active) sum += marked;
-        }
-        assertEq(sum, pool.impairedLoss(), "impairment drift");
+    function invariant_sflr_totalAssetsNeverUnderflows() public view {
+        pool.totalAssets(); // reverts on underflow -> invariant fails
     }
 }

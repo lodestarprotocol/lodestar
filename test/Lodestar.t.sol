@@ -538,6 +538,68 @@ contract LodestarTest is Test {
         assertEq(sflr.balanceOf(borrower), 100_000e18, "full yield-bearing collateral returned");
     }
 
+    // ---- 18-decimal (sFLR) settlement + impairment coverage (the launch collateral's immutable path) ----
+    function _openSflr(address who, uint256 coll) internal returns (uint256 id) {
+        sflr.mint(who, coll);
+        vm.startPrank(who);
+        sflr.approve(address(book), type(uint256).max);
+        id = book.open(address(sflr), coll, 0);
+        vm.stopPrank();
+    }
+
+    function _principalOf(uint256 id) internal view returns (uint256 p) {
+        (,,, uint128 pr,,,,,,,) = book.loans(id);
+        return pr;
+    }
+
+    function test_Sflr18dp_ImpairAndBuyoutSettle() public {
+        uint256 id = _openSflr(borrower, 100_000e18); // $2000 @55% LTV -> principal 1100e6
+        assertEq(_principalOf(id), 1100e6, "18dp principal");
+
+        // FLR $0.02 -> $0.008 (collateral $800 < $1100 debt) => underwater
+        ftso.set(FLR_USD, 800_000, 8);
+        book.impair(id);
+        // valStable = $800 = 800e6; est = 800e6 * 9500/10000 = 760e6; loss = 1100 - 760 = 340
+        assertEq(pool.impairedLoss(), 340e6, "18dp impairment mark wrong");
+
+        vm.warp(block.timestamp + 30 days + 48 hours + 1); // past due + grace
+        uint256 cost = book.buyoutCost(id); // exercises _settlementFloor on an 18dp collateral
+        assertGt(cost, 0, "18dp buyout cost zero");
+        address buyer = address(0xB111); // distinct from borrower (0xB0B) - a real third-party buyout
+        usdt0.mint(buyer, cost);
+        vm.startPrank(buyer);
+        usdt0.approve(address(book), cost);
+        book.buyout(id, cost);
+        vm.stopPrank();
+
+        assertEq(sflr.balanceOf(buyer), 100_000e18, "buyer didn't receive the 18dp collateral");
+        assertEq(pool.impairedLoss(), 0, "mark not cleared at settlement");
+        assertEq(pool.principalOut(), 0, "principalOut not reduced");
+    }
+
+    function test_Sflr18dp_HealthyDefaultSettleSwapBounty() public {
+        uint256 id = _openSflr(borrower, 100_000e18); // healthy: $2000 coll / $1100 debt
+        vm.warp(block.timestamp + 30 days + 48 hours + 1); // default on TIME, still healthy
+
+        // sFLR(18dp) -> USDT0(6dp) at $0.02 fair value: out = amountIn * 2 / 1e14
+        router.setRate(2, 1e14);
+        // contract bounty = 5% of 100k sFLR = 5000 sFLR ($100 < $500 cap); toSell = 95000 sFLR
+        uint256 toSell = 95_000e18;
+        address[] memory path = new address[](2);
+        path[0] = address(sflr);
+        path[1] = address(usdt0);
+        bytes memory data =
+            abi.encodeCall(MockRouter.swapExactTokensForTokens, (toSell, 0, path, address(book), block.timestamp));
+
+        uint256 keeperBefore = sflr.balanceOf(keeper);
+        vm.prank(keeper);
+        book.settleSwap(id, address(router), data, 0);
+
+        assertEq(sflr.balanceOf(keeper) - keeperBefore, 5000e18, "18dp keeper bounty wrong");
+        assertEq(sflr.balanceOf(address(book)), 0, "book still holds sFLR after settle");
+        assertEq(pool.principalOut(), 0, "principalOut not reduced");
+    }
+
     function test_YieldSkimRoutesAppreciationToReserve() public {
         book.setYieldSkimBps(5000);
         sflr.mint(borrower, 100_000e18);

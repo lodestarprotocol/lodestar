@@ -130,6 +130,9 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         uint64 dueAt
     );
     event LoanRepaid(uint256 indexed id, address payer);
+    event LoanPartiallyRepaid(
+        uint256 indexed id, address payer, uint256 repayAmount, uint256 collateralOut, uint256 newPrincipal
+    );
     event LoanRolled(uint256 indexed id, uint64 newDueAt, uint256 addFee);
     event CollateralAdded(uint256 indexed id, address indexed payer, uint256 amount);
     event LoanImpaired(uint256 indexed id, uint256 markedLoss);
@@ -159,6 +162,8 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     error CostAboveMax();
     error Undercollateralized();
     error TooManyActiveLoans();
+    error Defaulted();
+    error Slippage();
 
     constructor(LodestarPool _pool, LodestarOracle _oracle, address _reserve, address _owner) Ownable(_owner) {
         if (_reserve == address(0)) revert BadParam();
@@ -388,10 +393,17 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         emit LoanRepaid(id, msg.sender);
     }
 
-    /// @dev Returns collateral to the borrower, routing a `yieldSkimBps` share of any staking
-    ///      appreciation (measured via the collateral's open vs. current rate) to the reserve.
+    /// @dev Returns ALL of a loan's collateral to the borrower (full-repay path).
     function _returnCollateral(Loan storage L, uint256 id) internal {
-        uint256 ret = L.collAmount;
+        _returnCollateralPortion(L, id, L.collAmount);
+    }
+
+    /// @dev Return `amount` of a loan's collateral to the borrower, routing a `skimBps` share of
+    ///      THAT portion's staking appreciation (open vs. current rate) to the reserve. Shared by
+    ///      full repay (amount = collAmount) and partial release (amount = collateralOut) so both
+    ///      run the identical, audited skim math. Returns the net sent to the borrower.
+    function _returnCollateralPortion(Loan storage L, uint256 id, uint256 amount) internal returns (uint256 net) {
+        net = amount;
         uint16 skimBps = loanTerms[id].skimBps; // the skim in force when THIS loan opened
         if (skimBps != 0 && L.openRate != 0) {
             uint256 nowRate = oracle.rateOf(L.collateral);
@@ -401,16 +413,16 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
             uint256 maxRate = (uint256(L.openRate) * 12_000) / 10_000;
             if (nowRate > maxRate) nowRate = maxRate;
             if (nowRate > L.openRate) {
-                uint256 gain = (L.collAmount * (nowRate - L.openRate)) / nowRate;
+                uint256 gain = (amount * (nowRate - L.openRate)) / nowRate;
                 uint256 skim = (gain * skimBps) / 10_000;
                 if (skim != 0) {
-                    ret -= skim;
+                    net -= skim;
                     IERC20(L.collateral).safeTransfer(reserve, skim);
                     emit YieldSkimmed(id, L.collateral, skim);
                 }
             }
         }
-        IERC20(L.collateral).safeTransfer(L.borrower, ret);
+        IERC20(L.collateral).safeTransfer(L.borrower, net);
     }
 
     /// @notice Add collateral to an active loan (the cure path for a rollover health check).
@@ -423,6 +435,82 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         if (received == 0) revert BadParam();
         L.collAmount += received;
         emit CollateralAdded(id, msg.sender, received);
+    }
+
+    /// @notice Pay down part of a loan's principal, optionally reclaiming a bounded slice of
+    ///         collateral. The full close still goes through `repay`. Stays open while paused (a
+    ///         de-risk is never blocked) and, for pure paydown, needs no oracle (works FTSO-down).
+    /// @dev See PARTIAL_REPAY_SPEC.md. Impairment may fall here only by realized cash (never a
+    ///      price-based downward re-mark — that is the deposit->impair->redeem skim this book
+    ///      forbids); collateral release is gated to a healthy remainder at the current price so an
+    ///      underwater loan can never be stripped ahead of lenders.
+    /// @param repayAmount    stable to repay; 0 < repayAmount < principal (full close => repay()).
+    /// @param collateralOut  gross collateral to remove (0 = pure paydown; no oracle/tier read).
+    /// @param tierIndex      tier whose LTV the REMAINING position must satisfy (only if collOut>0).
+    /// @param minCollateralReceived  slippage guard on net collateral to the borrower (post-skim).
+    function partialRepay(
+        uint256 id,
+        uint256 repayAmount,
+        uint256 collateralOut,
+        uint256 tierIndex,
+        uint256 minCollateralReceived
+    ) external nonReentrant {
+        Loan storage L = loans[id];
+        if (!L.active) revert NotActive();
+
+        uint256 oldPrincipal = L.principal;
+        if (repayAmount == 0 || repayAmount >= oldPrincipal) revert BadParam();
+        uint256 newPrincipal = oldPrincipal - repayAmount;
+        if (newPrincipal < minPrincipal) revert BadParam(); // no dust loans left behind
+
+        // --- collateral release gate: healthy remainder at CURRENT price, never post-default ---
+        if (collateralOut > 0) {
+            if (collateralOut > L.collAmount) revert BadParam();
+            if (block.timestamp > uint256(L.dueAt) + loanTerms[id].grace) revert Defaulted();
+            Tier[] storage ts = tiers[L.collateral];
+            if (tierIndex >= ts.length) revert BadTier();
+            uint256 remColl = L.collAmount - collateralOut;
+            uint256 remValue18 = oracle.usdValue18(L.collateral, remColl); // reverts if FTSO down
+            _cachePrice(L.collateral, remValue18, remColl);
+            // round principal-as-usd UP so the check demands strictly more collateral to pass
+            uint256 remPrincipalUsd18 = (newPrincipal * 1e18 + stableUnit - 1) / stableUnit;
+            if ((remValue18 * ts[tierIndex].ltvBps) / 10_000 < remPrincipalUsd18) revert Undercollateralized();
+        }
+
+        // --- effects (all storage flips before any external transfer) ---
+        L.principal = newPrincipal.toUint128();
+
+        // free a proportional share of exposure, rounded DOWN; the remainder is cleared exactly
+        // when the loan finally closes (open + partials + close net to the original, no drift).
+        uint256 dExp = (uint256(L.principalUsd18) * repayAmount) / oldPrincipal;
+        if (dExp > 0) {
+            _reduceExposure(L.collateral, dExp);
+            L.principalUsd18 = (uint256(L.principalUsd18) - dExp).toUint128();
+        }
+
+        // impairment: reduce ONLY by realized cash (min(mark, repayAmount)); never recompute from
+        // price. Backed 1:1 by stable pulled in, so totalAssets moves up by <= the cash in and the
+        // skim vector stays closed. Any stale residual is reversed in full by _clearImpairment at
+        // close and, until then, only makes the share price conservatively low.
+        uint256 marked = L.impairedLoss;
+        if (marked > 0) {
+            uint256 u = repayAmount < marked ? repayAmount : marked;
+            pool.unimpair(u);
+            L.impairedLoss = (marked - u).toUint128();
+        }
+
+        if (collateralOut > 0) L.collAmount -= collateralOut;
+
+        // --- interactions ---
+        pool.pull(msg.sender, repayAmount);
+        pool.onPrincipalReturned(repayAmount);
+
+        if (collateralOut > 0) {
+            uint256 net = _returnCollateralPortion(L, id, collateralOut);
+            if (net < minCollateralReceived) revert Slippage();
+        }
+
+        emit LoanPartiallyRepaid(id, msg.sender, repayAmount, collateralOut, newPrincipal);
     }
 
     /// @notice Extend a loan before its deadline by paying another tier fee (up to maxLoanLife).
