@@ -66,7 +66,11 @@ contract DeployMainnet is Script {
     uint16 constant HAIRCUT_LST = 300; // 3% haircut on sFLR (can trade under NAV); FXRP = 0 (1:1)
     uint16 constant STXRP_HAIRCUT = 600; // 6% on stXRP: newer Firelight vault -> extra conservatism
     uint128 constant MIN_PRINCIPAL = 100e6; // $100 floor: prices out slot-exhaustion of maxActiveLoans
-    uint256 constant CAP_LAUNCH_USD18 = 200_000e18; // start small per collateral; raise as confidence grows
+    // GUARDED LAUNCH: tiny per-collateral borrow cap bounds the MAX possible loss from any tail risk
+    // (incl. the sFLR rate provider being upgradeable by a single external EOA) to the cap size — a
+    // cleaner, zero-code-change mitigation than an oracle rate-clamp. Multisig raises it via
+    // setExposureCap as confidence grows (25k -> 50k -> ...). Aave-style cap-guardian launch.
+    uint256 constant CAP_LAUNCH_USD18 = 25_000e18;
 
     function run() external {
         require(USDT0 != address(0), "set USDT0");
