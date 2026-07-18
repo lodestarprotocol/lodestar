@@ -99,7 +99,7 @@ body:before{content:"";position:fixed;top:0;left:0;right:0;height:2px;background
 .net i{width:6px;height:6px;border-radius:50%;background:var(--pos);box-shadow:0 0 0 3px var(--pos-wash)}
 .net-test{color:#9A6B00;border-color:#F0DCA8;background:#FDF7E8}
 .net-test i{background:#E0A100;box-shadow:0 0 0 3px #FBEBC4}
-.btn{font-weight:600;font-size:13px;border:1px solid transparent;border-radius:8px;padding:8px 14px;transition:.13s}
+.btn{font-weight:600;font-size:13px;border:1px solid transparent;border-radius:8px;padding:8px 14px;transition:.13s;white-space:nowrap}
 .btn-red{background:var(--red);color:#fff;box-shadow:0 1px 2px rgba(212,0,42,.25)}
 .btn-red:hover{background:var(--red-deep)}
 .btn-ln{background:var(--card);border-color:var(--line-str);color:var(--ink)}
@@ -293,7 +293,15 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
   .why > div{border-right:none;border-bottom:1px solid var(--line)}
   .why > div:last-child{border-bottom:none}
   .scrollx{overflow-x:auto}.scrollx table{min-width:580px}
-  .topbar{padding:0 14px;gap:10px}.tt{font-size:14px}
+  .topbar{padding:0 12px;gap:8px}
+  /* mobile header: drop the wrapping page-subtitle, keep a clean single-line breadcrumb that truncates */
+  .topbar .tt{display:none}
+  .topbar > div:not(.grow){min-width:0;flex:1 1 auto;overflow:hidden}
+  .crumb{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .crumb .cbrand,.crumb .csep{display:none}          /* mobile: show only the page name as the title */
+  .crumb .cpage{font-size:16px;font-weight:650;color:var(--ink);letter-spacing:-.01em}
+  .topbar a.icon-btn{display:none}   /* hide secondary X link on mobile; keep theme toggle + CTA */
+  #connect{padding:8px 12px}
   .toasts{left:12px;right:12px;bottom:12px;max-width:none}
 }
 </style>
@@ -638,7 +646,7 @@ window.calcEcon=()=>{
 function route(){let h=(location.hash||"#dashboard").replace("#","");if(!VIEWS.includes(h))h="dashboard";
   document.querySelectorAll(".view").forEach(v=>v.classList.toggle("active",v.id==="view-"+h));
   document.querySelectorAll(".nav-item").forEach(n=>n.classList.toggle("on",n.dataset.view===h));
-  $("crumb").innerHTML="<b>Lodestar</b> / "+TITLES[h][0];$("tt").textContent=TITLES[h][1];window.scrollTo(0,0);
+  $("crumb").innerHTML='<b class="cbrand">Lodestar</b><span class="csep"> / </span><span class="cpage">'+TITLES[h][0]+'</span>';$("tt").textContent=TITLES[h][1];window.scrollTo(0,0);
   const sb=document.querySelector(".sidebar"); if(sb)sb.classList.remove("open");
   const sc=$("scrim"); if(sc)sc.classList.remove("show");}
 window.addEventListener("hashchange",route);
