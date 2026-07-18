@@ -20,6 +20,7 @@
 <meta name="twitter:image" content="https://lodestarprotocol.xyz/assets/og.png" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<script>try{if(localStorage.getItem('lode_theme')==='dark')document.documentElement.classList.add('dark');}catch(e){}</script>
 <script src="assets/ethers.min.js"></script>
 <style>
 .actlist{display:flex;flex-direction:column}
@@ -40,7 +41,19 @@
   --line:#EAEAED; --line-str:#E0E0E4; --canvas:#F7F7F8; --card:#FFFFFF; --hover:#F5F5F6;
   --pos:#0A8A57; --pos-wash:#E9F6F0;
   --mono:"IBM Plex Mono",ui-monospace,monospace;
+  color-scheme:light;
 }
+/* dark theme — override the palette only; 188 var() usages adapt automatically */
+html.dark{
+  --red:#FF3B5C; --red-deep:#E0244A; --red-wash:#2A1016;
+  --ink:#EEF1F5; --ink2:#C2CAD4; --muted:#8B95A3; --faint:#69727F; --ghost:#3A424D;
+  --line:#232830; --line-str:#2E343D; --canvas:#0C0F13; --card:#151A21; --hover:#1B222A;
+  --pos:#35D38A; --pos-wash:#0F2A1E;
+  color-scheme:dark;
+}
+html.dark .net-test{background:#2A2410;border-color:#4A3F18}
+html.dark img[src*="logo"]{filter:none}
+.topbar,.sidebar,.card,.stat,.panel,.net,.icon-btn,.term,.inp,.seg,.seg button{transition:background-color .18s ease,border-color .18s ease,color .18s ease}
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
 body{font-family:Inter,system-ui,sans-serif;color:var(--ink);background:var(--canvas);font-size:13.5px;line-height:1.45;letter-spacing:-.006em;-webkit-font-smoothing:antialiased}
@@ -314,6 +327,7 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
       <div><div class="crumb" id="crumb"><b>Lodestar</b> / Dashboard</div><div class="tt" id="tt">Protocol overview</div></div>
       <div class="grow"></div>
       <div class="net net-test"><i></i> Coston2 Testnet</div>
+      <button class="icon-btn" id="themeToggle" onclick="toggleTheme()" title="Toggle dark mode" aria-label="Toggle dark mode"></button>
       <a class="icon-btn" href="https://x.com/lodestar_flr" target="_blank" rel="noopener" title="@lodestar_flr on X"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg></a>
       <button class="btn btn-red btn-sm" id="connect">Connect Wallet</button>
     </header>
@@ -604,6 +618,11 @@ const priceUsd=n=>"$"+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumF
 const BAL={FXRP:0n,USDT0:0n};
 function toast(msg,type){const c=$("toasts");if(!c)return;const el=document.createElement("div");el.className="toast"+(type?" "+type:"");el.innerHTML=`<div>${msg}</div><span class="tclose" onclick="this.parentElement.remove()">✕</span>`;c.appendChild(el);setTimeout(()=>el.remove(),6500);}
 window.toggleMenu=()=>{document.querySelector(".sidebar").classList.toggle("open");$("scrim").classList.toggle("show");};
+// ---- dark mode toggle (top corner) ----
+const MOON_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+const SUN_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
+function applyTheme(t){ const dark=t==='dark'; document.documentElement.classList.toggle('dark',dark); const b=$("themeToggle"); if(b){ b.innerHTML=dark?SUN_SVG:MOON_SVG; b.title=dark?'Switch to light mode':'Switch to dark mode'; } try{localStorage.setItem('lode_theme',t);}catch(_){} }
+window.toggleTheme=()=>applyTheme(document.documentElement.classList.contains('dark')?'light':'dark');
 window.fillAmt=(inp,tok,frac)=>{const v=Number(BAL[tok]||0n)/1e6*frac;$(inp).value=v>0?Math.floor(v*1e6)/1e6:0;preview();};
 
 /* ---- router ---- */
@@ -883,6 +902,7 @@ function refreshAll(){ loadChain(); loadPositions(); fetchBalances(); }
 window.closeOnb=()=>{ $("onb").style.display="none"; try{localStorage.setItem("lode_onboarded","1");}catch(e){} };
 function maybeOnboard(){ try{ if(!localStorage.getItem("lode_onboarded")) $("onb").style.display="flex"; }catch(e){} }
 function init(){
+  applyTheme(document.documentElement.classList.contains('dark')?'dark':'light');
   rows();terms();setColl("FXRP");calcEcon();route();loadChain();
   setInterval(()=>{loadChain();if(account)fetchBalances();},15000);
   setTimeout(tryEager,600); // reconnect the last-used wallet after EIP-6963 providers announce
