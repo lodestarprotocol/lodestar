@@ -229,6 +229,42 @@ contract LodestarTest is Test {
         assertGt(usdt0.balanceOf(borrower), 1225e6, "surplus returned to borrower");
     }
 
+    // --- Finding A regression: the keeper bounty must never come out of lender funds ---
+    // Marginally-solvent default: collateral value is just above the debt, but paying the 5% bounty
+    // would leave the reduced sale unable to clear principal at the floor. Fix drops the bounty and
+    // sells the whole collateral so lenders are paid before the keeper.
+    function test_BountyDroppedWhenItWouldShortLenders() public {
+        uint256 id = _openFxrp(borrower, 1000e6); // $2500 coll, principal $1250
+        vm.warp(block.timestamp + 7 days + 48 hours + 12 hours); // 12h into the Dutch decay (~92.5% floor)
+
+        // XRP at $1.30: collateral ($1300) is just above the $1250 debt, but 95% x floor can't cover it.
+        ftso.set(XRP_USD, 130_000_000, 8);
+        router.setRate(13, 10); // router pays $1.30 per FXRP (matches oracle)
+
+        uint256 poolBefore = pool.totalAssets();
+        vm.prank(keeper);
+        book.settleSwap(id, address(router), _swapData(1000e6), 0); // fix sells the FULL collateral
+
+        assertEq(fxrp.balanceOf(keeper), 0, "keeper paid NO bounty on a marginal default");
+        assertEq(pool.principalOut(), 0, "principal cleared");
+        assertGe(pool.totalAssets(), poolBefore, "lenders made whole, not shorted by the bounty");
+    }
+
+    // The fix is surgical: a comfortably-solvent default STILL pays the keeper its bounty.
+    function test_BountyStillPaidWhenComfortablySolvent() public {
+        uint256 id = _openFxrp(borrower, 1000e6); // $2500 coll, principal $1250
+        vm.warp(block.timestamp + 7 days + 48 hours + 12 hours);
+        router.setRate(25, 10); // $2.50: collateral ($2500) comfortably clears the debt
+
+        uint256 poolBefore = pool.totalAssets();
+        vm.prank(keeper);
+        book.settleSwap(id, address(router), _swapData(950e6), 0); // bounty carved out
+
+        assertEq(fxrp.balanceOf(keeper), 50e6, "keeper bounty still paid when the sale covers lenders");
+        assertEq(pool.principalOut(), 0, "principal cleared");
+        assertGe(pool.totalAssets(), poolBefore, "lenders whole");
+    }
+
     function test_DefaultSettlementViaBuyout() public {
         uint256 id = _openFxrp(borrower, 1000e6);
         vm.warp(block.timestamp + 7 days + 48 hours + 1);

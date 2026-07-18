@@ -124,10 +124,12 @@ contract LodestarPool is ERC4626, Ownable, ReentrancyGuard {
     ///      idle-liquidity bound with a semantic `InsufficientLiquidity` rather than a raw
     ///      ERC20 underflow.
     function deposit(uint256 assets, address receiver) public override nonReentrant returns (uint256) {
-        return super.deposit(assets, receiver);
+        _syncImpairment(); // also seals the reverse skim: minting during a settlement callback (mark
+        return super.deposit(assets, receiver); // still on the books, about to be reversed) reverts here.
     }
 
     function mint(uint256 shares, address receiver) public override nonReentrant returns (uint256) {
+        _syncImpairment();
         return super.mint(shares, receiver);
     }
 

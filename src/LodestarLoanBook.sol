@@ -58,12 +58,17 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         uint128 impairedLoss; // stable loss currently marked into the pool for this loan
     }
 
-    /// @dev Borrower-facing terms snapshotted at open so an owner (even a compromised one)
-    ///      cannot retroactively rewrite the deal on an already-open loan. Every field here is
-    ///      a promise read at the borrower's own repay/settlement; keeping it live would let a
-    ///      param change confiscate yield, erase the cure window, or lower the settlement floor
-    ///      under a loan the borrower can no longer exit. Owner setters still change the DEFAULTS
-    ///      applied to NEW loans. One packed slot.
+    /// @dev Borrower-facing terms snapshotted at open so an owner (even a compromised one) cannot
+    ///      retroactively rewrite the FROZEN TERM PARAMETERS of an already-open loan (grace, decay
+    ///      period, curve bps, skim). Each is a promise read at the borrower's own repay/settlement;
+    ///      keeping them live would let a param change confiscate yield, erase the cure window, or
+    ///      lower the settlement floor bps under a loan the borrower can no longer exit.
+    ///      NOT frozen: the settlement floor is (LIVE oracle value x frozen bps), so the oracle FEED
+    ///      itself stays a live, multisig-trusted input (LodestarOracle.setFeed). A compromised owner
+    ///      could still move an open loan's floor via the feed — bounded to real-FTSO values, <=50%
+    ///      haircut, and it hits borrower surplus first (lenders are paid before surplus in
+    ///      _distribute), but it is a trusted live input, not a snapshot. Owner setters otherwise
+    ///      change only the DEFAULTS applied to NEW loans. One packed slot.
     struct LoanTerms {
         uint64 grace; // grace window after due before default
         uint32 settleDecayPeriod; // Dutch decay time
@@ -714,9 +719,18 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
             _refreshPrice(L.collateral);
             uint256 bounty = _bountyAmount(L);
             uint256 toSell = L.collAmount - bounty;
-            if (bounty > 0) IERC20(L.collateral).safeTransfer(msg.sender, bounty);
-
             uint256 floor = _settlementFloor(id, toSell);
+            // The keeper bounty must never come out of lender funds. _bountyAmount checks the FULL
+            // collateral value, but the bounty is removed BEFORE the sale, so on a marginally-solvent
+            // default (principal <= collValue but the post-bounty sale can't clear the floor) the
+            // keeper would be paid ahead of lenders. Gate on the reduced sale: if selling `toSell` at
+            // the floor cannot cover principal, forgo the bounty and sell the whole collateral.
+            if (bounty != 0 && floor < L.principal) {
+                bounty = 0;
+                toSell = L.collAmount;
+                floor = _settlementFloor(id, toSell);
+            }
+            if (bounty > 0) IERC20(L.collateral).safeTransfer(msg.sender, bounty);
             if (minOut < floor) minOut = floor;
 
             proceeds = _swapViaRouter(L.collateral, router, swapData, toSell);
