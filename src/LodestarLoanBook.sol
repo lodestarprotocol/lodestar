@@ -574,28 +574,37 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     }
 
     function _impairActive(uint256 id) internal {
-        // Value off the live oracle, or the cached last-good price if FTSO is stalled. A crash is
-        // exactly when marking matters most and when a feed is most likely to lag, so impair must
-        // not depend on a live oracle to close the exit window.
-        uint256 price18 = _livePriceOrCache(loans[id].collateral);
+        // Requires a LIVE oracle: marking off a stale (pre-crash, high) price would mark ZERO loss
+        // and mislead lenders. If the feed is unavailable/stale, revert OracleDown rather than mark
+        // against a stale price (the exit sweep likewise refuses; settlement has its own fallback).
+        uint256 price18 = _liveOrZero(loans[id].collateral);
         if (price18 == 0) revert OracleDown();
         uint256 delta = _markLoanRaise(id, price18);
         if (delta > 0) pool.impair(delta);
     }
 
-    /// @notice Sweep the whole active book, marking every underwater loan's expected loss into
-    ///         the pool (raise-only). Permissionless. The pool calls this on every withdraw and
-    ///         redeem, so the share price is always fresh: no lender can exit against a stale,
-    ///         too-high price (the phantom-solvency window). Bounded by `maxActiveLoans` so it can
-    ///         never gas-brick a withdrawal. A keeper calling it during volatility is then just a
-    ///         UI-freshness convenience, not a safety dependency.
+    /// @notice Sweep the whole active book, raising every underwater loan's expected-loss mark into
+    ///         the pool. Permissionless + BEST-EFFORT: a loan whose collateral can't be freshly priced
+    ///         (FTSO outage) is skipped, never marked off a stale price. Bounded by `maxActiveLoans`
+    ///         so it can never gas-brick. The strict, exit-facing variant is `syncImpairmentForExit`.
     function syncImpairment() external nonReentrant {
         _syncAll();
     }
 
-    function _syncAll() internal {
+    /// @notice Strict sweep for the lender-exit path — the pool's withdraw/redeem call THIS. Reverts
+    ///         `OracleDown` if ANY active loan cannot be freshly priced, so no lender can redeem
+    ///         against a stale share price during an FTSO outage. The plain sweep alone cannot close
+    ///         the phantom-solvency window (it can't mark a loss it can't price); the exit must
+    ///         instead refuse to proceed, mirroring the settlement path's OracleDown guard.
+    function syncImpairmentForExit() external nonReentrant {
+        if (!_syncAll()) revert OracleDown();
+    }
+
+    /// @return allFresh false if any active loan's collateral could not be freshly priced this sweep.
+    function _syncAll() internal returns (bool allFresh) {
+        allFresh = true;
         uint256 n = activeLoanIds.length;
-        if (n == 0) return;
+        if (n == 0) return true;
         // Cache each collateral's price once (a book has only a handful of collaterals), then mark
         // every loan from the cached price. Oracle reads are O(collaterals), the loop is O(loans).
         address[] memory cAddr = new address[](n);
@@ -615,18 +624,27 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
                 }
             }
             if (!found) {
-                price18 = _livePriceOrCache(coll);
+                price18 = _liveOrZero(coll);
                 cAddr[cLen] = coll;
                 cPrice[cLen] = price18;
                 cLen++;
             }
             if (price18 != 0) totalDelta += _markLoanRaise(id, price18);
+            else allFresh = false; // un-priceable this block (FTSO outage) -> a lender exit must refuse
         }
         if (totalDelta > 0) pool.impair(totalDelta); // one pool write for the whole sweep
     }
 
-    /// @dev Live oracle price (refreshing the cache) or the last-good cached price if FTSO reverts.
-    function _livePriceOrCache(address collateral) internal returns (uint256) {
+    /// @dev Live oracle price (refreshing the cache), or 0 if the feed is unavailable/stale.
+    ///      IMPORTANT: on an oracle revert we do NOT fall back to the cached price for MARKING. A
+    ///      revert means the feed is already past its (<=1h) staleness bound; the last-good cache is
+    ///      a PRE-crash, stale-HIGH price, and marking off it would falsely mark ZERO loss and reopen
+    ///      the phantom-solvency exit window (a lender redeeming at par during an outage+crash). So we
+    ///      return 0 = "cannot price": single impair reverts OracleDown, the permissionless sweep
+    ///      skips that loan, and the lender-exit sweep (syncImpairmentForExit) reverts so no one
+    ///      redeems against a stale share price. Settlement keeps its OWN cached-price fallback via
+    ///      _floorStable + oracleFallbackDelay — a deliberate, time-bounded default path, not the exit.
+    function _liveOrZero(address collateral) internal returns (uint256) {
         try oracle.priceUsd18(collateral) returns (uint256 p18) {
             if (p18 != 0) {
                 lastPrice18[collateral] = p18;
@@ -634,7 +652,7 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
             }
             return p18;
         } catch {
-            return lastPrice18[collateral];
+            return 0;
         }
     }
 

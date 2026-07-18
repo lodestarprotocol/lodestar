@@ -433,15 +433,29 @@ contract LodestarTest is Test {
 
     // ---- v1.3.2 hardening regressions (from the 3-agent adversarial audit) ----
 
-    function test_ImpairWorksWhileOracleStalled() public {
-        // agent-1 MED: impair must still mark during an FTSO outage (exactly when a crash hits)
-        uint256 id = _openFxrp(borrower, 1000e6); // caches $2.50
+    function test_ImpairRefusesStalePrice_AndExitRefusesDuringOutage() public {
+        // Phantom-solvency FIX: during an FTSO outage the impairment path must NOT mark off the
+        // pre-crash cached (stale-HIGH) price — doing so falsely marks ZERO loss and would let a
+        // lender redeem at par during a crash, dumping the loss on stayers. So: single impair
+        // reverts, the permissionless sweep marks nothing off a stale price, and — the actual
+        // security property — a lender EXIT refuses rather than pricing against a stale book.
+        uint256 id = _openFxrp(borrower, 1000e6); // caches $2.50; principal 1250
         vm.warp(block.timestamp + 2 days);
-        ftso.set(XRP_USD, 0, 8); // FTSO down -> usdValue18 reverts
-        book.impair(id); // must fall back to the cached $2.50, not revert
-        // cached value 2500 * 95% = 2375 >= principal 1250 -> healthy at cache, marks 0
-        assertEq(pool.impairedLoss(), 0, "cache fallback mismark");
-        // now a loan that IS underwater at the cached price still marks via fallback
+        ftso.set(XRP_USD, 0, 8); // FTSO down -> oracle.priceUsd18 reverts
+
+        // (1) single impair refuses rather than marking off the stale cache
+        vm.expectRevert(LodestarLoanBook.OracleDown.selector);
+        book.impair(id);
+
+        // (2) permissionless sweep is best-effort: does not revert, and marks NOTHING off a stale price
+        book.syncImpairment();
+        assertEq(pool.impairedLoss(), 0, "must never mark off a stale price");
+
+        // (3) the exploit is closed: a lender exit reverts during the outage instead of exiting at par
+        vm.prank(lender);
+        vm.expectRevert(LodestarLoanBook.OracleDown.selector);
+        pool.redeem(1e6, lender, lender);
+        assertEq(id, 1);
     }
 
     function test_ImpairHealthyOraclePathCaches() public {

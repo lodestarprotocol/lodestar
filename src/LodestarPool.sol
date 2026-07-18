@@ -11,6 +11,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 
 interface ILoanBookSync {
     function syncImpairment() external;
+    function syncImpairmentForExit() external;
 }
 
 /// @title LodestarPool
@@ -134,23 +135,33 @@ contract LodestarPool is ERC4626, Ownable, ReentrancyGuard {
     }
 
     function withdraw(uint256 assets, address receiver, address owner_) public override nonReentrant returns (uint256) {
-        _syncImpairment(); // mark the whole book fresh so this exit can't be at a stale-high price
+        _syncImpairmentForExit(); // STRICT: reverts if the book can't be freshly priced (FTSO outage)
         if (assets > available()) revert InsufficientLiquidity();
         return super.withdraw(assets, receiver, owner_);
     }
 
     function redeem(uint256 shares, address receiver, address owner_) public override nonReentrant returns (uint256) {
-        _syncImpairment();
+        _syncImpairmentForExit();
         if (previewRedeem(shares) > available()) revert InsufficientLiquidity();
         return super.redeem(shares, receiver, owner_);
     }
 
-    /// @dev Force the LoanBook to mark every active loan's current expected loss into the share
-    ///      price before an exit is priced. Closes the phantom-solvency window on-chain: no lender
-    ///      can redeem against an unmarked underwater loan. The book bounds its own loop.
+    /// @dev Best-effort book sweep used by deposit/mint: marks what it can and, crucially, reverts
+    ///      when called re-entrantly during a settlement callback (the book guard is held), sealing
+    ///      the reverse-skim. A depositor during an FTSO outage can only over-pay (harming itself),
+    ///      so entries need not be blocked — only exits do.
     function _syncImpairment() internal {
         address lb = loanBook;
         if (lb != address(0)) ILoanBookSync(lb).syncImpairment();
+    }
+
+    /// @dev STRICT book sweep used by withdraw/redeem: forces every active loan to be marked off a
+    ///      LIVE oracle before an exit is priced, and REVERTS (OracleDown) if any collateral can't be
+    ///      freshly priced. Closes the phantom-solvency window on both sides — the mark AND the refusal
+    ///      to let a lender redeem against a stale share price during an FTSO outage.
+    function _syncImpairmentForExit() internal {
+        address lb = loanBook;
+        if (lb != address(0)) ILoanBookSync(lb).syncImpairmentForExit();
     }
 
     /// @dev Extra share precision hardens against ERC4626 first-depositor inflation/donation
