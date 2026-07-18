@@ -1,6 +1,7 @@
 import { useProtocol } from '../../hooks/useProtocol'
 import { MARKETS, type MarketKey } from '../../config/contracts'
 import { Stat, Card, LivePill } from '../ui'
+import { RecentActivity } from '../RecentActivity'
 import { usd, priceUsd, pct } from '../../lib/format'
 
 export function Dashboard({ onBorrow }: { onBorrow: (m: MarketKey) => void }) {
@@ -106,6 +107,8 @@ export function Dashboard({ onBorrow }: { onBorrow: (m: MarketKey) => void }) {
           </table>
         </div>
       </Card>
+
+      <RecentActivity />
     </div>
   )
 }
