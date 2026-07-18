@@ -471,6 +471,10 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
           <div><b>Collateral keeps earning</b><p>Locked sFLR and stXRP keep earning their staking yield for the full term. That appreciation comes back to you on repay. Dead-weight collateral is a thing of the past.</p></div>
         </div></div>
         <div class="card pad" style="margin-top:16px">
+          <div class="lbl">The mechanism, in one line</div>
+          <p style="margin-top:10px;color:var(--ink2);line-height:1.65;font-size:14px">Every loan is really a <b style="color:var(--ink)">fixed-term put option</b>. The borrower pays a premium (the fee) for the right to hand over the collateral only at the deadline, so the price path in between is irrelevant, and the lenders who wrote the option collect that premium. Those pooled premiums are calibrated to more than cover the rare walk-aways, which is exactly what lets your collateral survive an 80% drop without ever being liquidated.</p>
+        </div>
+        <div class="card pad" style="margin-top:16px">
           <div class="lbl">How a loan works</div>
           <div class="prow mt" style="padding-top:2px"><span class="l">1 · Lock</span><span class="r" style="font-family:Inter;font-weight:500;color:var(--ink2)">Deposit FXRP / stXRP / sFLR as collateral</span></div>
           <div class="prow"><span class="l">2 · Borrow</span><span class="r" style="font-family:Inter;font-weight:500;color:var(--ink2)">Receive USD₮0 up to the tier LTV, the one-time fee is simply deducted upfront</span></div>
@@ -532,6 +536,10 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
           <details>
             <summary>What happens if the price crashes during my loan?</summary>
             <div class="a">Nothing. That is the point. There is no health factor, no margin call, and no liquidation bot watching your position. Your collateral stays locked and untouched until your deadline, however violently the price moves in between, even an 80% one-day crash. The risk question changes from "did the price wick below a line for one block" to "can this asset lose more than half its value and stay there for the whole term". LTVs and term lengths are calibrated per asset against its own multi-year drawdown history so lenders stay covered through severe moves. And if an extreme crash does put a loan underwater mid-term, anyone can mark that expected loss into the pool price on the spot, so lenders always see the true position instead of a stale one, while the borrower keeps every option to repay and recover if the price comes back.</div>
+          </details>
+          <details>
+            <summary>So what kind of mechanism is that, technically?</summary>
+            <div class="a">Every loan is a fixed-term put option. When you borrow, you are buying the right to hand your collateral to the pool for exactly your debt at the deadline, and the one-time fee you pay is the option premium the lenders earn for writing it. That is why an 80% crash mid-term changes nothing: only the price at expiry matters, and if the collateral is underwater then, you simply exercise the option by walking away instead of repaying. The pool stays solvent because those pooled premiums are priced to more than cover the rare walk-aways, the same way an insurer's premiums cover its claims. No liquidation is needed because the right to default already lives inside the contract, dated to the deadline.</div>
           </details>
           <details>
             <summary>What happens if I miss my deadline?</summary>
