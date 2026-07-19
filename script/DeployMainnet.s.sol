@@ -66,6 +66,7 @@ contract DeployMainnet is Script {
     uint16 constant HAIRCUT_LST = 300; // 3% haircut on sFLR (can trade under NAV); FXRP = 0 (1:1)
     uint16 constant STXRP_HAIRCUT = 600; // 6% on stXRP: newer Firelight vault -> extra conservatism
     uint128 constant MIN_PRINCIPAL = 100e6; // $100 floor: prices out slot-exhaustion of maxActiveLoans
+    uint256 constant SEED_MIN = 10e6; // $10 minimum first-deposit seed; deploy reverts if unseeded
     // GUARDED LAUNCH: tiny per-collateral borrow cap bounds the MAX possible loss from any tail risk
     // (incl. the sFLR rate provider being upgradeable by a single external EOA) to the cap size — a
     // cleaner, zero-code-change mitigation than an oracle rate-clamp. Multisig raises it via
@@ -151,12 +152,13 @@ contract DeployMainnet is Script {
         if (SPARKDEX_V31 != address(0)) book.setRouterAllowed(SPARKDEX_V31, true);
         if (BLAZESWAP != address(0)) book.setRouterAllowed(BLAZESWAP, true);
 
-        // ---- seed the lender pool with any USD₮0 the deployer holds (ERC4626 inflation defense) ----
+        // ---- seed the lender pool (ERC4626 inflation defense; belt-and-suspenders over _decimalsOffset).
+        // MANDATORY: refuse to launch an unseeded pool. Fund the deploy wallet with >= SEED_MIN USD₮0
+        // before broadcasting; the whole balance goes in as the first deposit (deployer = first lender).
         uint256 bal = IERC20(USDT0).balanceOf(deployer);
-        if (bal > 0) {
-            IERC20(USDT0).approve(address(pool), bal);
-            pool.deposit(bal, deployer);
-        }
+        require(bal >= SEED_MIN, "fund deployer with USDT0 to seed the pool (>= SEED_MIN)");
+        IERC20(USDT0).approve(address(pool), bal);
+        pool.deposit(bal, deployer);
 
         vm.stopBroadcast();
 

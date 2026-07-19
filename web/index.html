@@ -875,8 +875,12 @@ async function fetchBalances(){
 }
 $("connect").onclick=openWalletPicker;
 const C=(a,abi)=>new ethers.Contract(a,abi,signer);
-const u6=v=>BigInt(Math.floor((parseFloat(v)||0)*1e6));
+// Guard non-finite input (e.g. "1e309" -> Infinity) so BigInt() never throws and wedges the handler.
+const u6=v=>{const f=parseFloat(v); return Number.isFinite(f)&&f>0?BigInt(Math.floor(f*1e6)):0n;};
 const errMsg=e=>e.shortMessage||e.reason||(e.info&&e.info.error&&e.info.error.message)||e.message||(""+e);
+// escape HTML in dynamic text before it reaches a toast innerHTML sink (defense in depth; call targets
+// are all hardcoded trusted contracts, but a node/wallet diagnostic string should never render as HTML)
+const esc=s=>String(s).replace(/[<>&]/g,c=>c==="<"?"&lt;":c===">"?"&gt;":"&amp;");
 // map transient testnet-RPC failures (429 / no revert data) to a clear, actionable message
 function friendlyErr(e){
   // decode a named custom error (the ABI carries the error fragments) into plain English
@@ -885,7 +889,7 @@ function friendlyErr(e){
   const m=(errMsg(e)||"").toLowerCase();
   if(m.includes("missing revert data")||m.includes("429")||m.includes("too many")||m.includes("failed to fetch")||m.includes("timeout")||m.includes("could not coalesce")||(e&&(e.code==="SERVER_ERROR"||e.code==="TIMEOUT"||e.code==="NETWORK_ERROR")))
     return "Testnet RPC was busy for a moment. Please try again in a few seconds. (If it keeps happening, switch your wallet's Coston2 RPC to https://coston2.enosys.global/ext/C/rpc)";
-  return errMsg(e); }
+  return esc(errMsg(e)); }
 // pool/book writes run an impairment sweep whose cost drifts between gas estimation and
 // inclusion (FTSO price moves add storage writes) — the node's exact estimate can leave the
 // tx a few hundred gas short and it dies at the end (seen live: ReentrancySentryOOG on withdraw).
