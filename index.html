@@ -308,6 +308,22 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
 </style>
 </head>
 <body>
+<script>
+/* Auto-fit zoom: render at the "comfortable, filled" size the design was drawn for, scaling with the
+   viewport so a standard desktop shows the polished ~1.4 look and laptops stay at 1.0. Uses window.innerWidth
+   (the real device viewport, unaffected by CSS zoom) so setting zoom never feeds back into the calc.
+   Runs before the body content parses, so content renders already-zoomed (no flash). Disabled at phone
+   widths (the mobile layout handles those). */
+(function(){
+  function fitZoom(){
+    var w=window.innerWidth||document.documentElement.clientWidth;
+    var z = w<=820 ? 1 : Math.min(1.5, Math.max(1, w/1371));
+    try{ document.body.style.zoom = z; }catch(e){}
+  }
+  fitZoom();
+  window.addEventListener('resize', fitZoom, {passive:true});
+})();
+</script>
 <div class="shell">
   <aside class="sidebar">
     <div class="sb-brand"><img src="assets/logo-mark.png" alt="Lodestar"/><b>lodestar</b></div>
