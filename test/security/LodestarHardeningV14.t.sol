@@ -279,6 +279,51 @@ contract LodestarHardeningV14Test is Test {
         book.withdrawReserve(5e6);
     }
 
+    // ---- withdrawReserve syncs impairment first, so the guard holds even on an UNMARKED bad loan --
+    function test_WithdrawReserveSyncsBeforeGuard_BlocksDrainAheadOfUnmarkedLoss() public {
+        // fund the buffer
+        uint256 id0 = _openFxrp(address(0xFEE), 1000e6);
+        usdt0.mint(address(0xFEE), 1250e6);
+        vm.startPrank(address(0xFEE));
+        usdt0.approve(address(pool), type(uint256).max);
+        book.repay(id0);
+        vm.stopPrank();
+        assertEq(book.reserveBalance(), 5e6);
+
+        // a loan goes deeply underwater and defaults, but NOBODY marks it (impairedLoss stays 0)
+        _openFxrp(borrower, 1000e6);
+        ftso.set(XRP, 50_000_000, 8);
+        vm.warp(block.timestamp + 7 days + 48 hours + 1);
+        assertEq(pool.impairedLoss(), 0, "loss deliberately left unmarked");
+
+        // Before the fix this drained the buffer ahead of the known-bad loan (the guard read the
+        // stale impairedLoss()==0). Now withdrawReserve runs _syncAll() first, so the guard sees the
+        // real earmark and reverts. (The sync's state change rolls back with the revert, so it is
+        // unobservable after — the revert itself is the proof the earmark was raised in-call.)
+        vm.expectRevert(LodestarLoanBook.BadParam.selector);
+        book.withdrawReserve(5e6);
+    }
+
+    // Positive control: with NO underwater loan, the identical drain succeeds — proving the revert
+    // above is caused by the in-call sync marking the loss, not by an unconditional block.
+    function test_WithdrawReserveStillWorksWhenBookIsHealthy() public {
+        uint256 id0 = _openFxrp(address(0xFEE), 1000e6);
+        usdt0.mint(address(0xFEE), 1250e6);
+        vm.startPrank(address(0xFEE));
+        usdt0.approve(address(pool), type(uint256).max);
+        book.repay(id0);
+        vm.stopPrank();
+        assertEq(book.reserveBalance(), 5e6);
+
+        // an open, healthy (not underwater, not defaulted) loan exists — sync marks zero loss
+        _openFxrp(borrower, 1000e6);
+        uint256 bufBefore = book.reserveBalance();
+        uint256 reserveBefore = usdt0.balanceOf(reserve);
+        book.withdrawReserve(5e6);
+        assertEq(book.reserveBalance(), bufBefore - 5e6, "healthy book: buffer withdrawable");
+        assertEq(usdt0.balanceOf(reserve), reserveBefore + 5e6, "reserve received the withdrawal");
+    }
+
     // ---- Fix 6: donated stable is recoverable, never stranded -------------------------------
     function test_SweepStableDonations() public {
         usdt0.mint(attacker, 1_000e6);
