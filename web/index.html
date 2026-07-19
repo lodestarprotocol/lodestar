@@ -834,6 +834,11 @@ function friendlyErr(e){ const m=(errMsg(e)||"").toLowerCase();
   if(m.includes("missing revert data")||m.includes("429")||m.includes("too many")||m.includes("failed to fetch")||m.includes("timeout")||m.includes("could not coalesce")||(e&&(e.code==="SERVER_ERROR"||e.code==="TIMEOUT"||e.code==="NETWORK_ERROR")))
     return "Testnet RPC was busy for a moment. Please try again in a few seconds. (If it keeps happening, switch your wallet's Coston2 RPC to https://coston2.enosys.global/ext/C/rpc)";
   return errMsg(e); }
+// pool/book writes run an impairment sweep whose cost drifts between gas estimation and
+// inclusion (FTSO price moves add storage writes) — the node's exact estimate can leave the
+// tx a few hundred gas short and it dies at the end (seen live: ReentrancySentryOOG on withdraw).
+// Pad every state-changing call; if estimation itself reverts, send unpadded so the real error surfaces.
+async function sendTx(c,fn,...args){ const ov={}; try{ const g=await c[fn].estimateGas(...args); ov.gasLimit=g*140n/100n+50000n; }catch(_){} return c[fn](...args,ov); }
 function busy(b,t){b.disabled=true;b.dataset.t=b.textContent;b.textContent=t;}
 function unbusy(b,t){b.disabled=false;b.textContent=t||b.dataset.t;}
 window.doBorrow=async()=>{
@@ -845,7 +850,7 @@ window.doBorrow=async()=>{
     const tok=C(FXRP_ADDR,ERC20_ABI), book=C(BOOK,BOOK_ABI);
     if(await tok.balanceOf(account)<amt){ toast('Not enough FXRP. Get test tokens from the <a href="https://faucet.flare.network/" target="_blank">Flare faucet</a>.',"err"); return; }
     if(await tok.allowance(account,BOOK)<amt){ busy(btn,"Approving FXRP…"); await (await tok.approve(BOOK,amt)).wait(); }
-    busy(btn,"Borrowing…"); await (await book.open(FXRP_ADDR,amt,BigInt(TIER))).wait();
+    busy(btn,"Borrowing…"); await (await sendTx(book,"open",FXRP_ADDR,amt,BigInt(TIER))).wait();
     unbusy(btn,"Borrow"); toast("Borrow complete. USD₮0 is in your wallet.","ok"); refreshAll();
   }catch(e){ unbusy(btn,"Borrow"); console.error(e); toast("Borrow failed: "+friendlyErr(e),"err"); }
 };
@@ -857,7 +862,7 @@ window.doDeposit=async()=>{
     const tok=C(USDT0_ADDR,ERC20_ABI), pool=C(POOL,POOLW_ABI);
     if(await tok.balanceOf(account)<amt){ toast('Not enough USD₮0. Get test tokens from the <a href="https://faucet.flare.network/" target="_blank">Flare faucet</a>.',"err"); return; }
     if(await tok.allowance(account,POOL)<amt){ busy(btn,"Approving USD₮0…"); await (await tok.approve(POOL,amt)).wait(); }
-    busy(btn,"Supplying…"); await (await pool.deposit(amt,account)).wait();
+    busy(btn,"Supplying…"); await (await sendTx(pool,"deposit",amt,account)).wait();
     unbusy(btn,"Supply USD₮0"); toast("Deposit complete. You're now earning.","ok"); refreshAll();
   }catch(e){ unbusy(btn,"Supply USD₮0"); console.error(e); toast("Deposit failed: "+friendlyErr(e),"err"); }
 };
@@ -867,7 +872,7 @@ window.doRepay=async(id,due)=>{
     const tok=C(USDT0_ADDR,ERC20_ABI), book=C(BOOK,BOOK_ABI), need=BigInt(due);
     if(await tok.balanceOf(account)<need){ toast("You need "+usd(Number(need)/1e6)+" USD₮0 to repay this loan.","err"); return; }
     if(await tok.allowance(account,POOL)<need){ toast("Approve USD₮0…"); await (await tok.approve(POOL,need)).wait(); }
-    toast("Repaying…"); await (await book.repay(BigInt(id))).wait();
+    toast("Repaying…"); await (await sendTx(book,"repay",BigInt(id))).wait();
     toast("Repaid. Your collateral is back in your wallet.","ok"); refreshAll();
   }catch(e){ console.error(e); toast("Repay failed: "+friendlyErr(e),"err"); }
 };
@@ -884,14 +889,14 @@ window.doPartial=async(id,principalStr)=>{
     if(principal-amt<minP){ toast("Leave at least "+usd(Number(minP)/1e6)+" owed, or use Repay to close the loan.","err"); return; }
     if(await tok.balanceOf(account)<amt){ toast("You need "+usd(v)+" USD₮0 for this pay-down.","err"); return; }
     if(await tok.allowance(account,POOL)<amt){ toast("Approve USD₮0…"); await (await tok.approve(POOL,amt)).wait(); }
-    toast("Paying down…"); await (await book.partialRepay(BigInt(id),amt,0n,0n,0n)).wait();
+    toast("Paying down…"); await (await sendTx(book,"partialRepay",BigInt(id),amt,0n,0n,0n)).wait();
     toast("Paid down. Your debt is lower and your collateral stays locked until you repay in full.","ok"); refreshAll();
   }catch(e){ console.error(e); toast("Pay-down failed: "+friendlyErr(e),"err"); }
 };
 window.doWithdraw=async()=>{
   if(!account) return;
-  try{ const pool=C(POOL,POOLW_ABI); const sh=await pool.balanceOf(account); toast("Withdrawing…"); await (await pool.redeem(sh,account,account)).wait(); toast("Withdrawn to your wallet.","ok"); refreshAll(); }
-  catch(e){ console.error(e); toast("Withdraw failed: "+errMsg(e),"err"); }
+  try{ const pool=C(POOL,POOLW_ABI); const sh=await pool.balanceOf(account); toast("Withdrawing…"); await (await sendTx(pool,"redeem",sh,account,account)).wait(); toast("Withdrawn to your wallet.","ok"); refreshAll(); }
+  catch(e){ console.error(e); toast("Withdraw failed: "+friendlyErr(e),"err"); }
 };
 const emptyHTML=(t,s)=>`<div class="empty" style="padding:28px"><b>${t}</b>${s}</div>`;
 async function loadPositions(){
