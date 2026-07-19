@@ -93,6 +93,11 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     uint16 public feeReserveBps = 2000; // % of every fee into the reserve buffer, rest to lenders
     uint16 public settleStartBps = 10_000; // Dutch floor at the moment of default
     uint16 public settleFloorMinBps = 8_500; // Dutch floor after full decay
+    // Max slippage a keeper's settleSwap may realize below FRESH oracle value on a SOLVENT default.
+    // Caps how far a keeper can self-deal the sale below fair value and skim the borrower's surplus,
+    // WITHOUT touching the crash/underwater liveness path (which relies on the Dutch floor decaying
+    // below a lagging DEX price). 3% default; only binds when the loan is solvent and the oracle fresh.
+    uint16 public settleSwapSlippageBps = 300;
     uint32 public settleDecayPeriod = 24 hours; // time to decay from start to min
     uint32 public maxLoanLife = 90 days;
     uint64 public oracleFallbackDelay = 7 days; // past due this long, settle can use the cached price
@@ -231,8 +236,19 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     }
 
     function setMinPrincipal(uint128 amount) external onlyOwner {
-        if (amount > 1000 * stableUnit) revert BadParam();
+        // Ceiling raised to give real reactive headroom against active-slot exhaustion griefing:
+        // the DoS cost scales with minPrincipal (a $10k floor makes filling maxActiveLoans need
+        // millions in the griefer's own locked collateral). Launch sets $100 (see DeployMainnet).
+        if (amount > 10_000 * stableUnit) revert BadParam();
         minPrincipal = amount;
+    }
+
+    /// @notice Max slippage a keeper settleSwap may realize below fresh oracle value on a solvent
+    ///         default (bps). Bounded so it can never be set so tight it bricks settleSwap (forcing
+    ///         buyout-only) nor so loose it stops protecting borrower surplus.
+    function setSettleSwapSlippageBps(uint16 bps) external onlyOwner {
+        if (bps < 100 || bps > 2000) revert BadParam();
+        settleSwapSlippageBps = bps;
     }
 
     /// @notice Cap on concurrent active loans. Bounds the withdraw-time impairment sweep so a
@@ -762,6 +778,24 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
                 floor = _settlementFloor(id, toSell);
             }
             if (bounty > 0) IERC20(L.collateral).safeTransfer(msg.sender, bounty);
+
+            // Borrower-surplus protection: when the loan is SOLVENT at a FRESH oracle price there is
+            // surplus above the debt that belongs to the borrower, and a keeper could otherwise self-
+            // deal the sale down to the (decayed) Dutch floor and pocket the difference. Require the
+            // remitted stable to clear fresh-oracle value less a bounded slippage. Skipped when the
+            // oracle is stale/down (returns 0) or the loan is underwater (no surplus to protect) — so
+            // the crash/outage liveness path keeps using only the Dutch floor and never over-tightens.
+            {
+                uint256 fresh = _liveOrZero(L.collateral); // 0 if unavailable/stale
+                if (fresh != 0) {
+                    uint256 collValStable = _usd18ToStable((fresh * L.collAmount) / _unit(L.collateral));
+                    if (collValStable >= L.principal) {
+                        uint256 fairMin = _usd18ToStable((fresh * toSell) / _unit(L.collateral));
+                        fairMin = (fairMin * (10_000 - settleSwapSlippageBps)) / 10_000;
+                        if (floor < fairMin) floor = fairMin;
+                    }
+                }
+            }
             if (minOut < floor) minOut = floor;
 
             proceeds = _swapViaRouter(L.collateral, router, swapData, toSell);

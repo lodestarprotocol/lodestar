@@ -304,22 +304,48 @@ contract LodestarTest is Test {
     }
 
     function test_DutchFloorDecays() public {
-        uint256 id = _openFxrp(borrower, 1000e6);
-        router.setRate(225, 100); // router pays $2.25 = 90% of FTSO value
+        uint256 id = _openFxrp(borrower, 1000e6); // $2500 coll, $1250 principal
+        // Crash so the loan is UNDERWATER: the Dutch floor (not the solvent-surplus guard) governs
+        // settleSwap, so the decay is what the keeper's fill is measured against.
+        ftso.set(XRP_USD, 100_000_000, 8); // $1.00 -> collateral $1000 < $1250 debt
+        router.setRate(9, 10); // router pays $0.90 = 90% of the $1.00 oracle value
 
         // right after default the floor is ~100%: a 90% fill must fail
         vm.warp(block.timestamp + 7 days + 48 hours + 1);
         assertEq(book.currentFloorBps(id), 10_000, "floor starts at 100%");
         vm.prank(keeper);
         vm.expectRevert(LodestarLoanBook.BelowFloor.selector);
-        book.settleSwap(id, address(router), _swapData(950e6), 0);
+        book.settleSwap(id, address(router), _swapData(1000e6), 0);
 
         // after the full decay period the floor is 85%: the same 90% fill clears
         vm.warp(block.timestamp + 24 hours);
         assertEq(book.currentFloorBps(id), 8_500, "floor decayed to min");
         vm.prank(keeper);
-        book.settleSwap(id, address(router), _swapData(950e6), 0);
+        book.settleSwap(id, address(router), _swapData(1000e6), 0);
         assertEq(pool.principalOut(), 0, "settled at the decayed floor");
+    }
+
+    // Regression for the borrower-surplus protection: on a SOLVENT default a keeper cannot self-deal
+    // the sale down to the decayed Dutch floor and pocket the surplus. settleSwap must remit >= fresh
+    // oracle value less the bounded settleSwapSlippageBps, even after the Dutch floor has fully decayed.
+    function test_SolventSettleSwapProtectsBorrowerSurplus() public {
+        uint256 id = _openFxrp(borrower, 1000e6); // $2500 coll, $1250 principal -> solvent
+        vm.warp(block.timestamp + 7 days + 48 hours + 24 hours); // Dutch floor fully decayed to 85%
+        assertEq(book.currentFloorBps(id), 8_500);
+
+        // A 90% fill clears the 85% Dutch floor but is BELOW the 97% fresh-oracle surplus guard.
+        router.setRate(225, 100); // $2.25 = 90% of the $2.50 oracle
+        vm.prank(keeper);
+        vm.expectRevert(LodestarLoanBook.BelowFloor.selector);
+        book.settleSwap(id, address(router), _swapData(950e6), 0);
+
+        // Remitting full oracle value clears and the surplus flows to the borrower, not the keeper.
+        router.setRate(25, 10); // $2.50 = full oracle value
+        uint256 borrowerBefore = usdt0.balanceOf(borrower);
+        vm.prank(keeper);
+        book.settleSwap(id, address(router), _swapData(950e6), 0);
+        assertEq(pool.principalOut(), 0, "settled");
+        assertGt(usdt0.balanceOf(borrower), borrowerBefore, "surplus preserved for the borrower");
     }
 
     function test_BuyoutByBorrowerIsAllowed() public {
