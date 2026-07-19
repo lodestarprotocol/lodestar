@@ -87,7 +87,8 @@ body:before{content:"";position:fixed;top:0;left:0;right:0;height:2px;background
 .tst i{width:6px;height:6px;border-radius:50%;background:var(--red)}
 
 .main{min-width:0;display:flex;flex-direction:column}
-.topbar{height:57px;border-bottom:1px solid var(--line);background:var(--card);position:sticky;top:0;z-index:20;display:flex;align-items:center;padding:0 24px;gap:14px}
+.topbar{height:57px;border-bottom:1px solid var(--line);background:var(--card);position:sticky;top:0;z-index:20;display:flex;justify-content:center}
+.topbar-inner{display:flex;align-items:center;gap:14px;height:100%;width:100%;max-width:1400px;padding:0 28px}
 .crumb{font-size:12px;color:var(--faint);font-weight:500}
 .crumb b{color:var(--ink);font-weight:650}
 .tt{font-size:15px;font-weight:650;letter-spacing:-.02em}
@@ -110,7 +111,7 @@ body:before{content:"";position:fixed;top:0;left:0;right:0;height:2px;background
 .icon-btn:hover{color:var(--red);border-color:var(--red)}
 .icon-btn svg{width:15px;height:15px}
 
-.content{padding:22px 28px 64px;max-width:1340px;width:100%;align-self:center}
+.content{padding:22px 28px 64px;max-width:1400px;width:100%;align-self:center}
 .view{display:none}.view.active{display:block}
 
 /* stat grids */
@@ -293,10 +294,10 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
   .why > div{border-right:none;border-bottom:1px solid var(--line)}
   .why > div:last-child{border-bottom:none}
   .scrollx{overflow-x:auto}.scrollx table{min-width:580px}
-  .topbar{padding:0 12px;gap:8px}
+  .topbar-inner{padding:0 12px;gap:8px}
   /* mobile header: drop the wrapping page-subtitle, keep a clean single-line breadcrumb that truncates */
   .topbar .tt{display:none}
-  .topbar > div:not(.grow){min-width:0;flex:1 1 auto;overflow:hidden}
+  .topbar-inner > div:not(.grow){min-width:0;flex:1 1 auto;overflow:hidden}
   .crumb{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .crumb .cbrand,.crumb .csep{display:none}          /* mobile: show only the page name as the title */
   .crumb .cpage{font-size:16px;font-weight:650;color:var(--ink);letter-spacing:-.01em}
@@ -331,6 +332,7 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
 
   <div class="main">
     <header class="topbar">
+     <div class="topbar-inner">
       <button class="menu-btn" onclick="toggleMenu()" aria-label="Menu"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
       <div><div class="crumb" id="crumb"><b>Lodestar</b> / Dashboard</div><div class="tt" id="tt">Protocol overview</div></div>
       <div class="grow"></div>
@@ -338,6 +340,7 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
       <button class="icon-btn" id="themeToggle" onclick="toggleTheme()" title="Toggle dark mode" aria-label="Toggle dark mode"></button>
       <a class="icon-btn" href="https://x.com/lodestar_flr" target="_blank" rel="noopener" title="@lodestar_flr on X"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg></a>
       <button class="btn btn-red btn-sm" id="connect">Connect Wallet</button>
+     </div>
     </header>
 
     <div class="content">
