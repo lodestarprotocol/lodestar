@@ -113,6 +113,7 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     mapping(address => uint64) public lastPriceAt;
     mapping(uint256 => Loan) public loans;
     mapping(uint256 => LoanTerms) public loanTerms; // per-loan snapshot of the borrower-facing terms
+    mapping(uint256 => uint16) public openLtvBps; // LTV the loan was underwritten at (its opening tier)
     uint256 public nextLoanId = 1;
     uint256 public reserveBalance; // stable held here as the first-loss buffer
 
@@ -267,6 +268,10 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     ///      known-bad settlement to drain the very cushion that is earmarked to cover it. Only
     ///      genuine surplus above outstanding marked losses is withdrawable.
     function withdrawReserve(uint256 amount) external onlyOwner {
+        // Mark any freshly-underwater loans first so `earmarked` reflects reality, not just what a
+        // keeper happened to have marked. Best-effort (skips un-priceable loans on an FTSO outage);
+        // it can only RAISE the earmark, tightening the guard, never loosen it.
+        _syncAll();
         uint256 earmarked = pool.impairedLoss();
         if (reserveBalance < amount || reserveBalance - amount < earmarked) revert BadParam();
         reserveBalance -= amount;
@@ -366,6 +371,7 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
             impairedLoss: 0
         });
         _snapshotTerms(id); // freeze borrower-facing terms; later param changes can't rewrite this deal
+        openLtvBps[id] = t.ltvBps; // the LTV this loan was underwritten at, for partial-release re-checks
         _addActive(id); // track for the withdraw-time impairment sweep (reverts if over the cap)
 
         // Fee is netted from disbursement: the borrower receives principal - fee and the fee
@@ -474,12 +480,19 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
             if (block.timestamp > uint256(L.dueAt) + loanTerms[id].grace) revert Defaulted();
             Tier[] storage ts = tiers[L.collateral];
             if (tierIndex >= ts.length) revert BadTier();
+            // Re-check the remainder against the loan's OWN opening LTV, never a caller-chosen tier's.
+            // The loan's deadline is unchanged by a partial repay, so validating a release against a
+            // shorter tier's laxer LTV would let a borrower strip collateral below the underwriting
+            // their (longer) term was priced at. A caller may pass a stricter tier to de-risk further,
+            // so the effective standard is the tighter of the two; it can never exceed the opening LTV.
+            uint16 ltvStd = openLtvBps[id];
+            if (ts[tierIndex].ltvBps < ltvStd) ltvStd = ts[tierIndex].ltvBps;
             uint256 remColl = L.collAmount - collateralOut;
             uint256 remValue18 = oracle.usdValue18(L.collateral, remColl); // reverts if FTSO down
             _cachePrice(L.collateral, remValue18, remColl);
             // round principal-as-usd UP so the check demands strictly more collateral to pass
             uint256 remPrincipalUsd18 = (newPrincipal * 1e18 + stableUnit - 1) / stableUnit;
-            if ((remValue18 * ts[tierIndex].ltvBps) / 10_000 < remPrincipalUsd18) revert Undercollateralized();
+            if ((remValue18 * ltvStd) / 10_000 < remPrincipalUsd18) revert Undercollateralized();
         }
 
         // --- effects (all storage flips before any external transfer) ---
