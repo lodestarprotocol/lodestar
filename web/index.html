@@ -783,7 +783,7 @@ async function fetchLenderCount(){
     const res=await fetch(EXPLORER+"/api/v2/tokens/"+POOL,{headers:{accept:"application/json"}});
     if(!res.ok) return;
     const d=await res.json(); const h=parseInt(d.holders||d.holders_count,10);
-    if(Number.isFinite(h)&&h>0){ _lenderCountAt=now; STATS.lendersExact=h; const s=String(h); setTx("d-lenders",s); setTx("l-lenders",s); }
+    if(Number.isFinite(h)&&h>0){ _lenderCountAt=now; STATS.lendersExact=h; const s=String(h); setTx("d-lenders",s); setTx("l-lenders",s); try{localStorage.setItem("lode_lenders",s);}catch(_){} }
   }catch(_){/* keep the heuristic already shown; retry on the next refresh (cache only set on success) */}
 }
 // live activity feed built from the loan book (no getLogs → never rate-limits)
@@ -993,6 +993,10 @@ window.closeOnb=()=>{ $("onb").style.display="none"; try{localStorage.setItem("l
 function maybeOnboard(){ try{ if(!localStorage.getItem("lode_onboarded")) $("onb").style.display="flex"; }catch(e){} }
 function init(){
   applyTheme(document.documentElement.classList.contains('dark')?'dark':'light');
+  // restore the last-known true lender count instantly (no seed-heuristic flash on repeat visits);
+  // fetchLenderCount then revalidates it. Marking STATS.lendersExact keeps the seed count from
+  // overwriting it before the fresh fetch lands.
+  try{ const c=localStorage.getItem("lode_lenders"); if(c){ STATS.lendersExact=parseInt(c,10); setTx("d-lenders",c); setTx("l-lenders",c); } }catch(_){}
   rows();terms();setColl("FXRP");calcEcon();route();loadChain();
   setInterval(()=>{loadChain();if(account)fetchBalances();},15000);
   setTimeout(tryEager,600); // reconnect the last-used wallet after EIP-6963 providers announce
