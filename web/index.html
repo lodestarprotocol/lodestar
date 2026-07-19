@@ -67,7 +67,7 @@ body:before{content:"";position:fixed;top:0;left:0;right:0;height:2px;background
 
 .shell{display:grid;grid-template-columns:244px 1fr;min-height:100vh}
 .sidebar{background:var(--card);border-right:1px solid var(--line);display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
-.sb-brand{display:flex;align-items:center;gap:10px;padding:20px 22px 18px;border-bottom:1px solid var(--line)}
+.sb-brand{display:flex;align-items:center;gap:10px;height:57px;padding:0 22px;border-bottom:1px solid var(--line)}
 .sb-brand img{height:24px;width:auto}
 .sb-brand b{font-weight:700;font-size:17px;color:var(--ink);letter-spacing:-.03em}
 .sb-nav{padding:8px 12px;display:flex;flex-direction:column}
@@ -720,6 +720,7 @@ function timeAgo(s){ if(!s)return""; const d=Math.max(0,Math.floor(Date.now()/10
 async function loadChain(){
   const p=readProvider();
   p.getBlockNumber().then(b=>setTx("netblock","#"+b)).catch(()=>{});
+  fetchLenderCount(); // fire in parallel with the multicall so the true holder count lands ASAP
   const base=[
     {t:FTSO,i:IFT,f:"getFeedById",a:[FEED_XRP]},
     {t:FTSO,i:IFT,f:"getFeedById",a:[FEED_FLR]},
@@ -748,9 +749,10 @@ async function loadChain(){
   if(r[5]) setTx("d-loans",String(Number(r[5][0])));
   const nextId=r[6]?Number(r[6][0]):1;
   if(r[7]) STATS.minPrincipal=Number(r[7][0])/1e6; // smallest borrowable loan, in USD₮0
+  // Lender count: the explorer index (true holder count) is authoritative once it resolves; only fall
+  // back to the seed-list heuristic before that, so the number never flickers back down on a refresh.
   let lenders=0; for(let i=0;i<SEED_LP.length;i++){ const b=r[seedStart+i]; if(b&&b[0]>0n) lenders++; }
-  const lv=String(lenders||(tvl>0?1:0)); setTx("d-lenders",lv); setTx("l-lenders",lv);
-  fetchLenderCount(); // refine with the true on-chain holder count (explorer index; seed list undercounts)
+  if(STATS.lendersExact==null){ const lv=String(lenders||(tvl>0?1:0)); setTx("d-lenders",lv); setTx("l-lenders",lv); }
   preview();
   // second batch: every loan → lifetime fees, unique active borrowers, recent activity feed
   if(nextId>1){
@@ -776,13 +778,13 @@ async function loadChain(){
 const EXPLORER="https://coston2-explorer.flare.network";
 let _lenderCountAt=0;
 async function fetchLenderCount(){
-  const now=Date.now(); if(now-_lenderCountAt<60000) return; _lenderCountAt=now; // cache 60s
+  const now=Date.now(); if(now-_lenderCountAt<60000) return; // cache the SUCCESS for 60s
   try{
     const res=await fetch(EXPLORER+"/api/v2/tokens/"+POOL,{headers:{accept:"application/json"}});
     if(!res.ok) return;
     const d=await res.json(); const h=parseInt(d.holders||d.holders_count,10);
-    if(Number.isFinite(h)&&h>0){ const s=String(h); setTx("d-lenders",s); setTx("l-lenders",s); }
-  }catch(_){/* keep the heuristic already shown */}
+    if(Number.isFinite(h)&&h>0){ _lenderCountAt=now; STATS.lendersExact=h; const s=String(h); setTx("d-lenders",s); setTx("l-lenders",s); }
+  }catch(_){/* keep the heuristic already shown; retry on the next refresh (cache only set on success) */}
 }
 // live activity feed built from the loan book (no getLogs → never rate-limits)
 function renderActivity(acts){
