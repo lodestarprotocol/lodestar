@@ -595,7 +595,9 @@ const POOL_ABI=["function totalAssets() view returns (uint256)","function princi
 // testnet seed lenders (fresh faucet wallets that supplied USD₮0); lender count = how many still hold shares
 const SEED_LP=["0xCF9071d193E73d3eFcFcA8a9ca4bF72d97545925","0x0368BdDfC65c95E7F6152987f88e5d017e3127Bf","0x53fEA31E7a0Be36D2A8d746eB55b67ea85678Ab2","0x60A2Cc5Fd6487E1BB826740aeD416FA4f93c7Ef1","0xA4b0aB8943ECE0B8cd6eE6Bd26366E9e02fC8987","0x8397dCe925c57bADb3fE48b9107f38C042D0EC34","0x9363210280909D31C138009688bE6566F0c1030b","0xb71e6a22884528F7eFE90388f8A3503716569D2A","0x17f0809f01e6aeb2F8f06Cc58c77Bfb9218e1F30","0xEF080024067C9b4A08DCeC24145A2F9f918d5570"];
 const ERC20_ABI=["function approve(address,uint256) returns (bool)","function allowance(address,address) view returns (uint256)","function balanceOf(address) view returns (uint256)"];
-const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function partialRepay(uint256,uint256,uint256,uint256,uint256)","function minPrincipal() view returns (uint128)","function activeLoanCount() view returns (uint256)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate,uint128 impairedLoss)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)"];
+const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function partialRepay(uint256,uint256,uint256,uint256,uint256)","function minPrincipal() view returns (uint128)","function activeLoanCount() view returns (uint256)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate,uint128 impairedLoss)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)",
+  // custom errors, so ethers decodes a revert to a name instead of a raw selector
+  "error BadParam()","error NotSupported()","error BadTier()","error CapExceeded()","error Paused()","error Undercollateralized()","error OracleDown()","error TooManyActiveLoans()","error NotActive()","error Defaulted()","error Slippage()"];
 const POOLW_ABI=["function deposit(uint256,address) returns (uint256)","function redeem(uint256,address,address) returns (uint256)","function balanceOf(address) view returns (uint256)","function convertToAssets(uint256) view returns (uint256)"];
 // ---- fast read layer: one Multicall3 call per refresh, with RPC failover + last-good cache ----
 const MC3="0xcA11bde05977b3631167028862bE2a173976CA11";
@@ -677,7 +679,15 @@ function setColl(k){COLL=k;TIER=0;$("collTag").textContent=MK[k].name;terms();pr
 function preview(){const m=MK[COLL],t=m.tiers[TIER],a=parseFloat($("amt").value)||0;const val=a*m.price,pr=val*t.ltv/100,fee=pr*t.fee/100,due=new Date(Date.now()+t.d*864e5);
   $("q-recv").textContent=usd(pr-fee);$("q-fee").textContent=usd(fee);$("q-repay").textContent=usd(pr);
   $("q-due").textContent=due.toLocaleDateString('en-US',{month:"short",day:"numeric",year:"numeric"});
-  $("q-note").innerHTML=`Locking <b>${a.toLocaleString('en-US')} ${MK[COLL].name}</b> (${usd(val)}) at ${t.ltv}% LTV, priced by FTSOv2.`+(COLL!=="FXRP"?` ${MK[COLL].name} keeps earning staking yield for the full term.`:"");
+  // Minimum-loan guard: a fractional amount can imply a principal below the on-chain minPrincipal,
+  // which reverts. Warn up front (with the collateral needed) instead of a cryptic custom error.
+  const minP=STATS.minPrincipal||1;
+  if(a>0 && m.price>0 && pr>0 && pr<minP){
+    const minColl=Math.ceil((minP/(m.price*t.ltv/100))*100)/100;
+    $("q-note").innerHTML=`<span style="color:var(--red)">This loan would be ${usd(pr)}, under the ${usd(minP)} minimum. Lock at least <b>${minColl.toLocaleString('en-US')} ${m.name}</b> to borrow.</span>`;
+  } else {
+    $("q-note").innerHTML=`Locking <b>${a.toLocaleString('en-US')} ${m.name}</b> (${usd(val)}) at ${t.ltv}% LTV, priced by FTSOv2.`+(COLL!=="FXRP"?` ${m.name} keeps earning staking yield for the full term.`:"");
+  }
   if($("b-px"))$("b-px").textContent=m.price?priceUsd(m.price):"…";
   if($("b-ltv"))$("b-ltv").textContent=Math.max(...m.tiers.map(x=>x.ltv))+"%";
   if($("b-fee"))$("b-fee").textContent=Math.min(...m.tiers.map(x=>x.fee)).toFixed(1)+"%";
@@ -699,6 +709,7 @@ async function loadChain(){
     {t:POOL,i:IPOOL,f:"totalSupply"},
     {t:BOOK,i:IBOOK,f:"activeLoanCount"},
     {t:BOOK,i:IBOOK,f:"nextLoanId"},
+    {t:BOOK,i:IBOOK,f:"minPrincipal"},
   ];
   const seedStart=base.length;
   SEED_LP.forEach(a=>base.push({t:POOL,i:IPOOL,f:"balanceOf",a:[a]}));
@@ -717,6 +728,7 @@ async function loadChain(){
   setTx("l-tvl",usd(tvl));setTx("l-util",util.toFixed(1)+"%");setTx("l-sp",sp.toLocaleString('en-US',{minimumFractionDigits:4,maximumFractionDigits:4}));
   if(r[5]) setTx("d-loans",String(Number(r[5][0])));
   const nextId=r[6]?Number(r[6][0]):1;
+  if(r[7]) STATS.minPrincipal=Number(r[7][0])/1e6; // smallest borrowable loan, in USD₮0
   let lenders=0; for(let i=0;i<SEED_LP.length;i++){ const b=r[seedStart+i]; if(b&&b[0]>0n) lenders++; }
   const lv=String(lenders||(tvl>0?1:0)); setTx("d-lenders",lv); setTx("l-lenders",lv);
   preview();
@@ -830,7 +842,11 @@ const C=(a,abi)=>new ethers.Contract(a,abi,signer);
 const u6=v=>BigInt(Math.floor((parseFloat(v)||0)*1e6));
 const errMsg=e=>e.shortMessage||e.reason||(e.info&&e.info.error&&e.info.error.message)||e.message||(""+e);
 // map transient testnet-RPC failures (429 / no revert data) to a clear, actionable message
-function friendlyErr(e){ const m=(errMsg(e)||"").toLowerCase();
+function friendlyErr(e){
+  // decode a named custom error (the ABI carries the error fragments) into plain English
+  const nm=e&&(e.revert&&e.revert.name||(e.info&&e.info.error&&e.info.error.data&&null));
+  if(nm){ const map={BadParam:"Amount is outside the allowed range — check the minimum loan size.",Paused:"Borrowing is paused right now.",CapExceeded:"This market has reached its cap.",Undercollateralized:"Not enough collateral for this amount.",NotSupported:"This collateral isn't live yet.",OracleDown:"Price feed is briefly unavailable, try again shortly.",TooManyActiveLoans:"The book is at capacity, try again shortly.",NotActive:"This loan is no longer active.",Defaulted:"This loan has already defaulted."}; if(map[nm]) return map[nm]; }
+  const m=(errMsg(e)||"").toLowerCase();
   if(m.includes("missing revert data")||m.includes("429")||m.includes("too many")||m.includes("failed to fetch")||m.includes("timeout")||m.includes("could not coalesce")||(e&&(e.code==="SERVER_ERROR"||e.code==="TIMEOUT"||e.code==="NETWORK_ERROR")))
     return "Testnet RPC was busy for a moment. Please try again in a few seconds. (If it keeps happening, switch your wallet's Coston2 RPC to https://coston2.enosys.global/ext/C/rpc)";
   return errMsg(e); }
@@ -846,6 +862,14 @@ window.doBorrow=async()=>{
   const m=MK[COLL]; if(!m.live){ toast(m.name+" is coming soon on Coston2."); return; }
   const btn=$("borrowBtn"), amt=u6($("amt").value);
   if(amt<=0n){ toast("Enter a collateral amount."); return; }
+  // pre-check the on-chain minimum so a too-small loan gives a clear message, not a raw revert
+  {
+    const t=m.tiers[TIER], pr=(Number(amt)/1e6)*m.price*t.ltv/100, minP=STATS.minPrincipal||1;
+    if(m.price>0 && pr>0 && pr<minP){
+      const minColl=Math.ceil((minP/(m.price*t.ltv/100))*100)/100;
+      toast(`That borrow would be ${usd(pr)}, under the ${usd(minP)} minimum. Lock at least ${minColl.toLocaleString('en-US')} ${m.name}.`,"err"); return;
+    }
+  }
   try{
     const tok=C(FXRP_ADDR,ERC20_ABI), book=C(BOOK,BOOK_ABI);
     if(await tok.balanceOf(account)<amt){ toast('Not enough FXRP. Get test tokens from the <a href="https://faucet.flare.network/" target="_blank">Flare faucet</a>.',"err"); return; }
