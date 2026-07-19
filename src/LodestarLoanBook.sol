@@ -575,6 +575,11 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         }
 
         L.dueAt = newDue;
+        // A rollover re-underwrites at the CHOSEN tier's LTV and adopts its duration, so that tier's
+        // LTV becomes the loan's binding standard for any later partial-release. Without this refresh
+        // the release clamp would keep reading the ORIGINAL opening LTV: open lax -> roll into a strict
+        // tier (fresh deadline) -> strip back to the lax LTV the strict extension was never granted for.
+        openLtvBps[id] = ts[tierIndex].ltvBps;
         emit LoanRolled(id, newDue, addFee);
     }
 

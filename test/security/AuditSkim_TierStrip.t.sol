@@ -106,6 +106,32 @@ contract AuditSkimTierStrip is Test {
         assertEq(_collAmount(id), 900e6, "healthy release at opening LTV allowed");
     }
 
+    // Regression: a rollover must refresh openLtvBps to the tier it rolled into, else a borrower could
+    // open lax, roll into a strict tier (fresh deadline), then strip back to the lax opening LTV.
+    function test_RolloverRefreshesOpenLtv_BlocksStripToOldLax() public {
+        // open at the LAX 70% tier, so openLtvBps = 7000
+        fxrp.mint(borrower, 1_000e6);
+        vm.startPrank(borrower);
+        fxrp.approve(address(book), type(uint256).max);
+        uint256 id = book.open(address(fxrp), 1_000e6, 1); // 70% LTV, principal 1750e6
+        vm.stopPrank();
+        assertEq(book.openLtvBps(id), 7000);
+
+        // pay down so the position can re-qualify at the STRICT 50% tier, then rollover into tier 0
+        usdt0.mint(borrower, 1_000e6);
+        vm.startPrank(borrower);
+        usdt0.approve(address(pool), type(uint256).max);
+        book.partialRepay(id, 500e6, 0, 0, 0); // principal 1750 -> 1250; 1250 <= 2500*50%, qualifies
+        book.rollover(id, 0); // roll into the 50% tier
+        assertEq(book.openLtvBps(id), 5000, "rollover refreshed the binding LTV to the tier it adopted");
+
+        // now a release pointed at the lax 70% tier is bounded to the rolled-into 50%, so it reverts
+        // (remainder 700 XRP = $1750, *50% = $875 < principal 1250)
+        vm.expectRevert(LodestarLoanBook.Undercollateralized.selector);
+        book.partialRepay(id, 250e6, 300e6, 1, 0);
+        vm.stopPrank();
+    }
+
     function test_PartialRepayCallerCanChooseStricterTier() public {
         // Open at the AGGRESSIVE tier 1 (70%): principal 1750e6 against $2500 collateral.
         fxrp.mint(borrower, 1_000e6);
