@@ -644,10 +644,15 @@ async function mc(calls){
   }
 }
 const STATS={}; // last-good numbers so a slow/failed refresh never blanks the UI
+// price = FTSO feed x staking rate x (1 - haircut), matching LodestarOracle.priceUsd18 exactly.
+// FXRP: XRP feed, 1:1, no haircut. sFLR: FLR feed x Sceptre rate x 3% haircut. stXRP: XRP feed x
+// Firelight rate x 6% haircut. `rate` here is a reference value for the testnet "Soon" display; the
+// mainnet build reads the exact rate on-chain via the oracle (the rate drifts up as staking accrues).
+// tiers MUST match DeployMainnet (append-only, permanent): FXRP 50/45, sFLR 45/40, stXRP 40/35.
 const MK={
-  FXRP:{img:"assets/fxrp.png",name:"FXRP",sub:"XRP · FAsset",price:0,live:true,tiers:[{n:"Standard",d:7,ltv:50,fee:2.0},{n:"Extended",d:30,ltv:45,fee:3.5}]},
-  STXRP:{img:"assets/stxrp.png",name:"stXRP",sub:"Firelight staked XRP",price:0,soon:true,tiers:[{n:"Standard",d:7,ltv:50,fee:2.0},{n:"Extended",d:30,ltv:45,fee:3.5}]},
-  SFLR:{img:"assets/sflr.png",name:"sFLR",sub:"Sceptre staked FLR",price:0,soon:true,tiers:[{n:"Short",d:7,ltv:55,fee:2.0},{n:"Standard",d:30,ltv:45,fee:3.0}]},
+  FXRP:{img:"assets/fxrp.png",name:"FXRP",sub:"XRP · FAsset",price:0,live:true,feed:"XRP",rate:1,hc:0,tiers:[{n:"Standard",d:7,ltv:50,fee:2.0},{n:"Extended",d:30,ltv:45,fee:3.5}]},
+  STXRP:{img:"assets/stxrp.png",name:"stXRP",sub:"Firelight staked XRP",price:0,soon:true,feed:"XRP",rate:1.0001,hc:0.06,tiers:[{n:"Standard",d:7,ltv:40,fee:2.0},{n:"Extended",d:30,ltv:35,fee:3.5}]},
+  SFLR:{img:"assets/sflr.png",name:"sFLR",sub:"Sceptre staked FLR",price:0,soon:true,feed:"FLR",rate:1.8564,hc:0.03,tiers:[{n:"Short",d:7,ltv:45,fee:2.0},{n:"Standard",d:30,ltv:40,fee:3.5}]},
 };
 let COLL="FXRP", TIER=0;
 const $=id=>document.getElementById(id);
@@ -736,8 +741,9 @@ async function loadChain(){
   let r;
   try{ r=await mc(base); }catch(e){ setTx("netblock","offline"); console.error("chain",e); return; }
   const px=v=>v?Number(v[0])/10**Number(v[1]):0;
-  if(r[0]){ MK.FXRP.price=MK.STXRP.price=px(r[0]); }
-  if(r[1]){ MK.SFLR.price=px(r[1]); }
+  const xrp=r[0]?px(r[0]):0, flr=r[1]?px(r[1]):0;
+  // each collateral: feed price x staking rate x (1 - haircut), so preview matches the oracle valuation
+  for(const k of Object.keys(MK)){ const m=MK[k]; const base=m.feed==="FLR"?flr:xrp; if(base) m.price=base*m.rate*(1-m.hc); }
   for(const k of Object.keys(MK)){const el=$("px-"+k);if(el&&MK[k].price)el.textContent=priceUsd(MK[k].price);}
   if(r[2]) STATS.tvl=Number(r[2][0])/1e6;
   if(r[3]) STATS.borrowed=Number(r[3][0])/1e6;
