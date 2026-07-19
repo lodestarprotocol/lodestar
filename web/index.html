@@ -731,6 +731,7 @@ async function loadChain(){
   if(r[7]) STATS.minPrincipal=Number(r[7][0])/1e6; // smallest borrowable loan, in USD₮0
   let lenders=0; for(let i=0;i<SEED_LP.length;i++){ const b=r[seedStart+i]; if(b&&b[0]>0n) lenders++; }
   const lv=String(lenders||(tvl>0?1:0)); setTx("d-lenders",lv); setTx("l-lenders",lv);
+  fetchLenderCount(); // refine with the true on-chain holder count (explorer index; seed list undercounts)
   preview();
   // second batch: every loan → lifetime fees, unique active borrowers, recent activity feed
   if(nextId>1){
@@ -749,6 +750,20 @@ async function loadChain(){
       renderActivity(acts);
     }
   }
+}
+// True lender count = current holders of the lodUSDT0 share token. The public RPCs cap getLogs so
+// the client can't enumerate holders itself; the Blockscout index exposes the count in one call
+// (CORS-open, mainnet explorer has the same shape). Falls back silently to the seed-list heuristic.
+const EXPLORER="https://coston2-explorer.flare.network";
+let _lenderCountAt=0;
+async function fetchLenderCount(){
+  const now=Date.now(); if(now-_lenderCountAt<60000) return; _lenderCountAt=now; // cache 60s
+  try{
+    const res=await fetch(EXPLORER+"/api/v2/tokens/"+POOL,{headers:{accept:"application/json"}});
+    if(!res.ok) return;
+    const d=await res.json(); const h=parseInt(d.holders||d.holders_count,10);
+    if(Number.isFinite(h)&&h>0){ const s=String(h); setTx("d-lenders",s); setTx("l-lenders",s); }
+  }catch(_){/* keep the heuristic already shown */}
 }
 // live activity feed built from the loan book (no getLogs → never rate-limits)
 function renderActivity(acts){
