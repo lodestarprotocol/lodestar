@@ -68,13 +68,19 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     ///      could still move an open loan's floor via the feed — bounded to real-FTSO values, <=50%
     ///      haircut, and it hits borrower surplus first (lenders are paid before surplus in
     ///      _distribute), but it is a trusted live input, not a snapshot. Owner setters otherwise
-    ///      change only the DEFAULTS applied to NEW loans. One packed slot.
+    ///      change only the DEFAULTS applied to NEW loans. `penaltyBps` (reserve cut on default) and
+    ///      `keeperBps` (settle bounty + impairment recovery haircut) are ALSO frozen here so an owner
+    ///      cannot retroactively enlarge the reserve penalty or the keeper bounty carved from an open
+    ///      loan's surplus. `keeperCapUsd18` stays live (it only ever CAPS the bounty lower). One packed
+    ///      slot: 64+32+16*5 = 176 bits.
     struct LoanTerms {
         uint64 grace; // grace window after due before default
         uint32 settleDecayPeriod; // Dutch decay time
         uint16 settleStartBps; // Dutch floor at default
         uint16 settleFloorMinBps; // Dutch floor after full decay
         uint16 skimBps; // yield-skim share applied at repay
+        uint16 penaltyBps; // reserve cut on default, applied in _distribute
+        uint16 keeperBps; // settle bounty + impairment-recovery haircut for this loan
     }
 
     // --- immutable wiring ---
@@ -175,6 +181,7 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     error TooManyActiveLoans();
     error Defaulted();
     error Slippage();
+    error NotBorrower();
 
     constructor(LodestarPool _pool, LodestarOracle _oracle, address _reserve, address _owner) Ownable(_owner) {
         if (_reserve == address(0)) revert BadParam();
@@ -285,9 +292,12 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     ///      genuine surplus above outstanding marked losses is withdrawable.
     function withdrawReserve(uint256 amount) external onlyOwner {
         // Mark any freshly-underwater loans first so `earmarked` reflects reality, not just what a
-        // keeper happened to have marked. Best-effort (skips un-priceable loans on an FTSO outage);
-        // it can only RAISE the earmark, tightening the guard, never loosen it.
-        _syncAll();
+        // keeper happened to have marked. STRICT (mirrors the lender-exit sweep): if any active loan
+        // cannot be freshly priced during an FTSO outage, a crash could leave real losses UNMARKED and
+        // `earmarked` understated, letting the buffer be drained below the true first-loss it must
+        // cover. Refuse the withdrawal until every loan can be priced, rather than draining on a
+        // stale-low earmark.
+        if (!_syncAll()) revert OracleDown();
         uint256 earmarked = pool.impairedLoss();
         if (reserveBalance < amount || reserveBalance - amount < earmarked) revert BadParam();
         reserveBalance -= amount;
@@ -329,13 +339,16 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     /// @dev Reverts OracleDown inside the fallback delay if FTSO is unavailable.
     function buyoutCost(uint256 id) external returns (uint256) {
         if (!loans[id].active) revert NotActive();
+        // Quote only makes sense once the loan is actually buyable; gating here also stops a caller
+        // refreshing the price cache against a live (non-defaulted) loan.
+        if (block.timestamp <= uint256(loans[id].dueAt) + loanTerms[id].grace) revert NotYetDefaulted();
         return _settlementFloor(id, loans[id].collAmount);
     }
 
     /// @dev Current settlement floor (stable) for a portion of a loan's collateral, using the
     ///      loan's snapshotted Dutch curve. Keeps the settlement functions off the stack limit.
     function _settlementFloor(uint256 id, uint256 collPortion) internal returns (uint256) {
-        return _floorStable(loans[id], collPortion, currentFloorBps(id), loanTerms[id].settleFloorMinBps);
+        return _floorStable(loans[id], collPortion, currentFloorBps(id));
     }
 
     // ------------------------------------------------------------------ borrow
@@ -433,7 +446,15 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         net = amount;
         uint16 skimBps = loanTerms[id].skimBps; // the skim in force when THIS loan opened
         if (skimBps != 0 && L.openRate != 0) {
-            uint256 nowRate = oracle.rateOf(L.collateral);
+            // The rate read is best-effort: if the LST rate provider (Sceptre/Firelight) is paused or
+            // mid-upgrade and reverts, skip the skim (nowRate stays 0 -> no skim) rather than trap the
+            // borrower's collateral. Skipping only ever FAVOURS the borrower.
+            uint256 nowRate;
+            try oracle.rateOf(L.collateral) returns (uint256 r) {
+                nowRate = r;
+            } catch {
+                nowRate = 0;
+            }
             // Clamp recognized appreciation to 20% over the (<=90d) term. Real LST staking
             // yield is a few percent; anything beyond this is a manipulated/abnormal rate
             // provider, and we refuse to skim the borrower on it (favours the borrower).
@@ -554,6 +575,14 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     function rollover(uint256 id, uint256 tierIndex) external nonReentrant {
         Loan storage L = loans[id];
         if (!L.active) revert NotActive();
+        // A rollover mutates the loan's binding LTV (openLtvBps) and deadline; only the borrower may
+        // do that. Without this a third party could pay the fee to roll another borrower's loan into a
+        // shorter-duration tier and move their deadline CLOSER to default, or flip their LTV standard
+        // for a later partial-release, without consent. Repay/settle stay permissionless (they only
+        // ever help the borrower); this one is not, because it re-underwrites the position. A borrower
+        // choosing a shorter tier for their OWN loan is their prerogative, so no separate anti-shorten
+        // guard is needed once the caller is constrained to the borrower.
+        if (msg.sender != L.borrower) revert NotBorrower();
         if (block.timestamp > L.dueAt) revert Expired();
         Tier[] storage ts = tiers[L.collateral];
         if (tierIndex >= ts.length) revert BadTier();
@@ -634,6 +663,36 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         if (!_syncAll()) revert OracleDown();
     }
 
+    /// @notice Read-only: true iff every active loan's collateral can be freshly priced right now.
+    ///         The pool consults this so `maxWithdraw`/`maxRedeem` report 0 during an FTSO outage —
+    ///         when the real withdraw/redeem would revert `OracleDown` via `syncImpairmentForExit` —
+    ///         keeping the ERC4626 contract (max* must not advertise an amount that then reverts)
+    ///         honest for integrators. O(active loans), view-only, deduped per collateral.
+    function oracleReady() external view returns (bool) {
+        uint256 n = activeLoanIds.length;
+        if (n == 0) return true;
+        address[] memory seen = new address[](n);
+        uint256 sLen;
+        for (uint256 i; i < n; i++) {
+            address coll = loans[activeLoanIds[i]].collateral;
+            bool done;
+            for (uint256 j; j < sLen; j++) {
+                if (seen[j] == coll) {
+                    done = true;
+                    break;
+                }
+            }
+            if (done) continue;
+            seen[sLen++] = coll;
+            try oracle.priceUsd18(coll) returns (uint256 p18) {
+                if (p18 == 0) return false;
+            } catch {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /// @return allFresh false if any active loan's collateral could not be freshly priced this sweep.
     function _syncAll() internal returns (bool allFresh) {
         allFresh = true;
@@ -700,7 +759,7 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     function _markLoanRaise(uint256 id, uint256 price18) internal returns (uint256 delta) {
         Loan storage L = loans[id];
         uint256 valStable = _usd18ToStable((price18 * L.collAmount) / _unit(L.collateral));
-        uint256 est = (valStable * (10_000 - keeperBps)) / 10_000;
+        uint256 est = (valStable * (10_000 - loanTerms[id].keeperBps)) / 10_000; // frozen at open
         uint256 newLoss = est >= L.principal ? 0 : L.principal - est;
         if (newLoss > L.impairedLoss) {
             delta = newLoss - uint256(L.impairedLoss);
@@ -769,7 +828,7 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         uint256 proceeds;
         {
             _refreshPrice(L.collateral);
-            uint256 bounty = _bountyAmount(L);
+            uint256 bounty = _bountyAmount(id);
             uint256 toSell = L.collAmount - bounty;
             uint256 floor = _settlementFloor(id, toSell);
             // The keeper bounty must never come out of lender funds. _bountyAmount checks the FULL
@@ -846,21 +905,23 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     ///      loan is underwater — the bounty then comes only out of what would have been the
     ///      borrower's surplus, never ahead of lenders. Underwater defaults are settled via the
     ///      buyout path (arbitrageurs, no bounty) or by a keeper willing to settle for gas alone.
-    function _bountyAmount(Loan storage L) internal returns (uint256 b) {
-        if (msg.sender == L.borrower || keeperBps == 0) return 0;
+    function _bountyAmount(uint256 id) internal returns (uint256 b) {
+        Loan storage L = loans[id];
+        uint16 kBps = loanTerms[id].keeperBps; // frozen at open, not the live default
+        if (msg.sender == L.borrower || kBps == 0) return 0;
         uint256 p18 = lastPrice18[L.collateral];
         if (p18 == 0) return 0;
         uint256 collValueStable = _usd18ToStable((p18 * L.collAmount) / _unit(L.collateral));
         if (collValueStable < L.principal) return 0; // underwater: floor guarantee stays intact
-        b = (L.collAmount * keeperBps) / 10_000;
-        uint256 capTokens = (uint256(keeperCapUsd18) * _unit(L.collateral)) / p18;
+        b = (L.collAmount * kBps) / 10_000;
+        uint256 capTokens = (uint256(keeperCapUsd18) * _unit(L.collateral)) / p18; // cap stays live
         if (b > capTokens) b = capTokens;
     }
 
     /// @dev Stable value of `collPortion` at `floorBps` of the oracle price. If FTSO is down:
     ///      reverts inside `oracleFallbackDelay` past due, afterwards decays the cached-price
     ///      floor to zero over ORACLE_DOWN_DECAY so settlement can never be bricked for good.
-    function _floorStable(Loan storage L, uint256 collPortion, uint16 floorBps, uint16 floorMinBps)
+    function _floorStable(Loan storage L, uint256 collPortion, uint16 floorBps)
         internal
         returns (uint256 floor)
     {
@@ -873,7 +934,12 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
             uint256 p18 = lastPrice18[L.collateral];
             if (p18 == 0) return 0; // no reference ever cached (cannot happen after open)
             uint256 v18 = (p18 * collPortion) / _unit(L.collateral);
-            floor = (_usd18ToStable(v18) * floorMinBps) / 10_000;
+            // Apply the loan's CURRENT Dutch position (floorBps) to the cached price — the same bps the
+            // live path would use at this instant — so an outage never jumps the floor below the level
+            // the borrower was owed. (currentFloorBps has usually decayed to its minimum by the time the
+            // fallback window opens; honoring it explicitly keeps the two paths consistent even if the
+            // fallback delay is ever set shorter than the decay period.)
+            floor = (_usd18ToStable(v18) * floorBps) / 10_000;
             // Decay the cached-price floor over the outage, but never below 20% of it: a dead
             // oracle should delay settlement, not hand a sniper the collateral for a pittance.
             // In the absurd tail (oracle dead this long AND price truly below 20%) the loan
@@ -909,7 +975,7 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         shortfall = gap > 0; // whatever the buffer couldn't cover is a realized lender loss
         pool.onPrincipalReturned(principal);
 
-        uint256 penalty = (principal * penaltyBps) / 10_000;
+        uint256 penalty = (principal * loanTerms[id].penaltyBps) / 10_000; // frozen at open
         uint256 payPenalty = remaining >= penalty ? penalty : remaining;
         remaining -= payPenalty;
         if (payPenalty > 0) reserveBalance += payPenalty; // stays in this contract
@@ -925,7 +991,9 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
             settleDecayPeriod: settleDecayPeriod,
             settleStartBps: settleStartBps,
             settleFloorMinBps: settleFloorMinBps,
-            skimBps: yieldSkimBps
+            skimBps: yieldSkimBps,
+            penaltyBps: penaltyBps,
+            keeperBps: keeperBps
         });
     }
 
