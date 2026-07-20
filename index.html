@@ -373,15 +373,15 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
           <div class="stat"><div class="k">Lenders</div><div class="v t" id="d-lenders">…</div><div class="sub">USD₮0 suppliers</div></div>
           <div class="stat"><div class="k">Borrowers</div><div class="v t" id="d-borrowers">…</div><div class="sub">open positions</div></div>
           <div class="stat"><div class="k">Lifetime fees paid</div><div class="v" id="d-fees">…</div><div class="sub">one-time borrower fees</div></div>
-          <div class="stat"><div class="k">Est. lender APY</div><div class="v t" style="color:var(--red)">14–18%</div><div class="sub">fees + sFLR yield</div></div>
+          <div class="stat"><div class="k">Est. lender APY</div><div class="v t" style="color:var(--red)">14–18%</div><div class="sub">from borrower fees</div></div>
         </div>
 
-        <div class="sec-h"><h2>Fee distribution</h2><span>every borrower fee, split on repay</span></div>
+        <div class="sec-h"><h2>Where borrower fees go</h2><span>every fee works for lenders</span></div>
         <div class="card pad">
           <div class="dist"><span class="a" style="width:80%"></span><span class="b" style="width:20%"></span></div>
           <div class="legend">
-            <div class="li"><span class="sw" style="background:var(--red)"></span> To lenders <b>80%</b> · <span class="mut" id="d-fee-lenders">$0</span></div>
-            <div class="li"><span class="sw" style="background:var(--ink)"></span> To reserve <b>20%</b> · <span class="mut" id="d-fee-reserve">$0</span></div>
+            <div class="li"><span class="sw" style="background:var(--red)"></span> Lender yield <b>80%</b> · <span class="mut" id="d-fee-lenders">$0</span></div>
+            <div class="li"><span class="sw" style="background:var(--ink)"></span> First-loss buffer <b>20%</b> · <span class="mut" id="d-fee-reserve">$0</span></div>
           </div>
         </div>
 
@@ -442,8 +442,7 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
               <div class="fauc">No test USD₮0 yet? Claim it from the <a href="https://faucet.flare.network/coston2" target="_blank" rel="noopener">official Flare faucet ↗</a></div>
               <div class="preview" style="border-top:none;padding-top:4px">
                 <div class="prow hero"><span class="l">Estimated net APY</span><span class="r" style="color:var(--red)">14–18%</span></div>
-                <div class="prow"><span class="l">Borrower fees</span><span class="r">4–9%</span></div>
-                <div class="prow"><span class="l">sFLR yield passthrough</span><span class="r">+ variable</span></div>
+                <div class="prow"><span class="l">Source</span><span class="r">borrower fees</span></div>
                 <div class="prow"><span class="l">You receive</span><span class="r" id="l-shares">0 lodUSD₮0</span></div>
                 <div class="badge"><b>Seniority</b>, lenders are repaid first on any default.</div>
               </div>
@@ -504,41 +503,40 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
 
       <!-- ===================== ECONOMICS ===================== -->
       <section class="view" id="view-economics">
-        <div class="sec-h first"><h2>Protocol economics</h2><span>fee model, live</span></div>
+        <div class="sec-h first"><h2>Lender returns</h2><span>estimate what your USD₮0 earns</span></div>
         <div class="card pad">
           <div class="calc">
             <div>
               <div class="slrow">
-                <div class="sl-h"><label>Outstanding borrowed</label><b id="e-out">$500,000</b></div>
-                <input type="range" id="e-out-s" min="50000" max="10000000" step="50000" value="500000" oninput="calcEcon()"/>
-                <div class="sl-sub">Total USD₮0 borrowed at any time. Needs about 25% more deposited at the 80% utilization cap.</div>
+                <div class="sl-h"><label>Your deposit</label><b id="e-dep">$50,000</b></div>
+                <input type="range" id="e-dep-s" min="1000" max="1000000" step="1000" value="50000" oninput="calcEcon()"/>
+                <div class="sl-sub">How much USD₮0 you supply to the lender pool. Redeem anytime, no lockups.</div>
+              </div>
+              <div class="slrow">
+                <div class="sl-h"><label>Pool utilization</label><b id="e-util">80%</b></div>
+                <input type="range" id="e-util-s" min="0" max="80" step="5" value="80" oninput="calcEcon()"/>
+                <div class="sl-sub">Share of the pool lent to borrowers at any time. Idle funds earn nothing; the ceiling is 80%.</div>
+              </div>
+              <div class="slrow">
+                <div class="sl-h"><label>Average borrower fee</label><b id="e-fee">3.0%</b></div>
+                <input type="range" id="e-fee-s" min="1" max="5" step="0.1" value="3.0" oninput="calcEcon()"/>
+                <div class="sl-sub">Flat per-term fee borrowers pay, netted at open. FXRP tiers today: 2% (7-day), 3.5% (30-day).</div>
               </div>
               <div class="slrow">
                 <div class="sl-h"><label>Loan turnover</label><b id="e-turn">12&times; / yr</b></div>
                 <input type="range" id="e-turn-s" min="4" max="52" step="1" value="12" oninput="calcEcon()"/>
-                <div class="sl-sub">How many times the book re-originates per year. A 30-day loan rolled continuously is ~12; weekly is ~52.</div>
-              </div>
-              <div class="slrow">
-                <div class="sl-h"><label>Average origination fee</label><b id="e-fee">3.0%</b></div>
-                <input type="range" id="e-fee-s" min="1" max="5" step="0.1" value="3.0" oninput="calcEcon()"/>
-                <div class="sl-sub">Per-term fee, netted at open. FXRP tiers today: 2% (7-day), 3.5% (30-day).</div>
-              </div>
-              <div class="slrow">
-                <div class="sl-h"><label>Protocol fee share</label><b id="e-split">20%</b></div>
-                <input type="range" id="e-split-s" min="0" max="100" step="5" value="20" oninput="calcEcon()"/>
-                <div class="sl-sub">The <span class="mono">feeReserveBps</span> split. Protocol keeps this; lenders get the rest. Default is 20%, generous to lenders to pull in liquidity.</div>
+                <div class="sl-sub">How often the book re-originates per year. A 30-day loan rolled continuously is ~12; weekly is ~52.</div>
               </div>
             </div>
             <div>
               <div class="card pad" style="background:var(--hover);border:none">
-                <div class="out-lbl">Protocol fee revenue / year</div>
-                <div class="out-big" style="color:var(--red)" id="e-proto">$36,000</div>
-                <div class="prow mt" style="padding-top:14px"><span class="orow" style="width:100%;border:none;padding:0"><span class="l">Gross fees / year</span><span class="r" id="e-gross" style="margin-left:auto">$180,000</span></span></div>
-                <div class="orow"><span class="l">Protocol keeps</span><span class="r" id="e-protorow" style="color:var(--red)">$36,000</span></div>
-                <div class="orow"><span class="l">Lenders earn</span><span class="r" id="e-lenders">$144,000</span></div>
-                <div class="orow"><span class="l">Implied lender APY</span><span class="r" id="e-apy">28.8%</span></div>
+                <div class="out-lbl">Estimated APY on your deposit</div>
+                <div class="out-big" style="color:var(--red)" id="e-apy">23.0%</div>
+                <div class="prow mt" style="padding-top:14px"><span class="orow" style="width:100%;border:none;padding:0"><span class="l">Estimated earnings / year</span><span class="r" id="e-earn" style="margin-left:auto">$11,520</span></span></div>
+                <div class="orow"><span class="l">Of your deposit, working</span><span class="r" id="e-lent">$40,000</span></div>
+                <div class="orow"><span class="l">Redeem</span><span class="r">anytime, no lockups</span></div>
               </div>
-              <div class="sl-sub" style="margin-top:12px;line-height:1.6">Default penalties (5% of principal) and an optional staking-yield skim add revenue on top and are not shown here. All numbers are illustrative and driven by the sliders, not a promise.</div>
+              <div class="sl-sub" style="margin-top:12px;line-height:1.6">Your yield comes from the flat fee borrowers pay each term. Lenders are senior: on any default, principal is repaid first and a first-loss buffer absorbs shortfalls before you take a loss. All numbers are illustrative and driven by the sliders, not a promise.</div>
             </div>
           </div>
         </div>
@@ -589,7 +587,7 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
 
       <div class="foot">
         <b style="color:var(--ink2)">Lodestar</b>, no-liquidation fixed-term lending, live on <b style="color:var(--ink2)">Coston2 testnet</b>.
-        LoanBook <span class="mono">0x4Ca4…9c47</span> · Pool <span class="mono">0xe7D4…7B8b</span> · Oracle <span class="mono">0x4302…Bd4c</span> ·
+        LoanBook <span class="mono">0x2529…Bc46</span> · Pool <span class="mono">0xB19d…3472</span> · Oracle <span class="mono">0x05b9…477A</span> ·
         <a href="https://coston2-explorer.flare.network/address/0x2529C6a1A0aAca615d1479Ea24eB0710b9C3Bc46" target="_blank" rel="noopener" style="color:var(--red);font-weight:600">explorer ↗</a>
       </div>
     </div>
@@ -652,7 +650,7 @@ const STATS={}; // last-good numbers so a slow/failed refresh never blanks the U
 const MK={
   FXRP:{img:"assets/fxrp.png",name:"FXRP",sub:"XRP · FAsset",price:0,live:true,feed:"XRP",rate:1,hc:0,tiers:[{n:"Standard",d:7,ltv:50,fee:2.0},{n:"Extended",d:30,ltv:45,fee:3.5}]},
   STXRP:{img:"assets/stxrp.png",name:"stXRP",sub:"Firelight staked XRP",price:0,soon:true,feed:"XRP",rate:1.0001,hc:0.06,tiers:[{n:"Standard",d:7,ltv:40,fee:2.0},{n:"Extended",d:30,ltv:35,fee:3.5}]},
-  SFLR:{img:"assets/sflr.png",name:"sFLR",sub:"Sceptre staked FLR",price:0,soon:true,feed:"FLR",rate:1.8564,hc:0.03,tiers:[{n:"Short",d:7,ltv:45,fee:2.0},{n:"Standard",d:30,ltv:40,fee:3.5}]},
+  SFLR:{img:"assets/sflr.png",name:"sFLR",sub:"Sceptre staked FLR",price:0,soon:true,feed:"FLR",rate:1.8564,hc:0.03,tiers:[{n:"Standard",d:7,ltv:45,fee:2.0},{n:"Extended",d:30,ltv:40,fee:3.5}]},
 };
 let COLL="FXRP", TIER=0;
 const $=id=>document.getElementById(id);
@@ -670,12 +668,13 @@ window.fillAmt=(inp,tok,frac)=>{const v=Number(BAL[tok]||0n)/1e6*frac;$(inp).val
 
 /* ---- router ---- */
 const VIEWS=["dashboard","borrow","lend","portfolio","why","economics","faq"];
-const TITLES={dashboard:["Dashboard","Protocol overview"],borrow:["Borrow","Borrow against your assets"],lend:["Lend","Supply USD₮0, earn fees"],portfolio:["Portfolio","Your positions"],why:["Why no-liquidation","The model, in three ideas"],economics:["Economics","Protocol fee model"],faq:["FAQ","Frequently asked questions"]};
+const TITLES={dashboard:["Dashboard","Protocol overview"],borrow:["Borrow","Borrow against your assets"],lend:["Lend","Supply USD₮0, earn fees"],portfolio:["Portfolio","Your positions"],why:["Why no-liquidation","The model, in three ideas"],economics:["Economics","What your deposit earns"],faq:["FAQ","Frequently asked questions"]};
 window.calcEcon=()=>{
-  const out=+$("e-out-s").value, turn=+$("e-turn-s").value, fee=+$("e-fee-s").value/100, split=+$("e-split-s").value/100;
-  const gross=out*fee*turn, proto=gross*split, lenders=gross-proto, apy=out>0?(lenders/out*100):0;
-  $("e-out").textContent=usd(out); $("e-turn").innerHTML=turn+"&times; / yr"; $("e-fee").textContent=(fee*100).toFixed(1)+"%"; $("e-split").textContent=Math.round(split*100)+"%";
-  $("e-gross").textContent=usd(gross); $("e-proto").textContent=usd(proto); $("e-protorow").textContent=usd(proto); $("e-lenders").textContent=usd(lenders); $("e-apy").textContent=apy.toFixed(1)+"%";
+  const dep=+$("e-dep-s").value, util=+$("e-util-s").value/100, fee=+$("e-fee-s").value/100, turn=+$("e-turn-s").value;
+  const LENDER_SHARE=0.8; // lenders' share of fees; the remainder funds the first-loss buffer
+  const lent=dep*util, earn=lent*fee*turn*LENDER_SHARE, apy=dep>0?(earn/dep*100):0;
+  $("e-dep").textContent=usd(dep); $("e-util").textContent=Math.round(util*100)+"%"; $("e-fee").textContent=(fee*100).toFixed(1)+"%"; $("e-turn").innerHTML=turn+"&times; / yr";
+  $("e-apy").textContent=apy.toFixed(1)+"%"; $("e-earn").textContent=usd(earn); $("e-lent").textContent=usd(lent);
 };
 function route(){let h=(location.hash||"#dashboard").replace("#","");if(!VIEWS.includes(h))h="dashboard";
   document.querySelectorAll(".view").forEach(v=>v.classList.toggle("active",v.id==="view-"+h));
@@ -726,6 +725,7 @@ async function loadChain(){
   const p=readProvider();
   p.getBlockNumber().then(b=>setTx("netblock","#"+b)).catch(()=>{});
   fetchLenderCount(); // fire in parallel with the multicall so the true holder count lands ASAP
+  fetchSupplyActs(); // pull lodUSD₮0 mint/burn (supply/withdraw) events for the activity feed
   const base=[
     {t:FTSO,i:IFT,f:"getFeedById",a:[FEED_XRP]},
     {t:FTSO,i:IFT,f:"getFeedById",a:[FEED_FLR]},
@@ -792,14 +792,38 @@ async function fetchLenderCount(){
     if(Number.isFinite(h)&&h>0){ _lenderCountAt=now; STATS.lendersExact=h; const s=String(h); setTx("d-lenders",s); setTx("l-lenders",s); try{localStorage.setItem("lode_lenders",s);}catch(_){} }
   }catch(_){/* keep the heuristic already shown; retry on the next refresh (cache only set on success) */}
 }
-// live activity feed built from the loan book (no getLogs → never rate-limits)
-function renderActivity(acts){
+// live activity feed = loan events (from the loan book, no getLogs) + supply/withdraw events
+// (lodUSD₮0 mints/burns pulled from the explorer transfers index, same CORS-open source as the
+// holder count, so still no getLogs on the client). The two sources are merged and time-sorted.
+let _loanActs=[], _supplyActs=[];
+function renderActivity(acts){ _loanActs=(acts||[]).filter(a=>a&&a.t>0).map(a=>({...a,kind:"loan"})); _renderActs(); }
+async function fetchSupplyActs(){
+  try{
+    const res=await fetch(EXPLORER+"/api/v2/tokens/"+POOL+"/transfers",{headers:{accept:"application/json"}});
+    if(!res.ok) return;
+    const d=await res.json(); const ZERO="0x0000000000000000000000000000000000000000"; const out=[];
+    (d.items||[]).forEach(it=>{
+      const from=((it.from&&it.from.hash)||"").toLowerCase(), to=((it.to&&it.to.hash)||"").toLowerCase();
+      const dec=parseInt((it.total&&it.total.decimals)||"12",10);
+      const amt=Number((it.total&&it.total.value)||0)/Math.pow(10,dec); // shares ≈ USD₮0 at ~1.0 price
+      const t=Math.floor(new Date(it.timestamp).getTime()/1000);
+      if(!amt||!t) return;
+      if(from===ZERO&&to&&to!==ZERO) out.push({kind:"supply",b:to,amt,t});
+      else if(to===ZERO&&from&&from!==ZERO) out.push({kind:"withdraw",b:from,amt,t});
+    });
+    _supplyActs=out; _renderActs();
+  }catch(_){/* keep the loan feed already shown; retry next refresh */}
+}
+function _renderActs(){
   const el=$("d-activity"); if(!el) return;
-  const list=acts.filter(a=>a.t>0).sort((x,y)=>y.t-x.t).slice(0,10);
+  const list=_loanActs.concat(_supplyActs).sort((x,y)=>y.t-x.t).slice(0,10);
   if(!list.length) return;
   el.innerHTML='<div class="card"><div class="actlist">'+list.map(a=>{
     const who=a.b.slice(0,6)+"…"+a.b.slice(-4);
-    return `<a class="actrow" href="https://coston2-explorer.flare.network/address/${a.b}" target="_blank" rel="noopener"><span class="actdot ${a.active?'on':''}"></span><span class="actmain"><b>${who}</b> borrowed <b>${usd(a.pr)}</b><small>against ${a.coll.toLocaleString('en-US',{maximumFractionDigits:2})} FXRP · ${a.active?'open':'closed'}</small></span><span class="actago">${timeAgo(a.t)}</span></a>`;
+    const url="https://coston2-explorer.flare.network/address/"+a.b;
+    if(a.kind==="supply") return `<a class="actrow" href="${url}" target="_blank" rel="noopener"><span class="actdot on"></span><span class="actmain"><b>${who}</b> supplied <b>${usd(a.amt)}</b><small>USD₮0 to the lender pool</small></span><span class="actago">${timeAgo(a.t)}</span></a>`;
+    if(a.kind==="withdraw") return `<a class="actrow" href="${url}" target="_blank" rel="noopener"><span class="actdot"></span><span class="actmain"><b>${who}</b> withdrew <b>${usd(a.amt)}</b><small>USD₮0 from the lender pool</small></span><span class="actago">${timeAgo(a.t)}</span></a>`;
+    return `<a class="actrow" href="${url}" target="_blank" rel="noopener"><span class="actdot ${a.active?'on':''}"></span><span class="actmain"><b>${who}</b> borrowed <b>${usd(a.pr)}</b><small>against ${a.coll.toLocaleString('en-US',{maximumFractionDigits:2})} FXRP · ${a.active?'open':'closed'}</small></span><span class="actago">${timeAgo(a.t)}</span></a>`;
   }).join("")+'</div></div>';
 }
 // ============ wallet (EIP-6963 multi-wallet) + write path ============
