@@ -12,6 +12,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 interface ILoanBookSync {
     function syncImpairment() external;
     function syncImpairmentForExit() external;
+    function oracleReady() external view returns (bool);
 }
 
 /// @title LodestarPool
@@ -108,15 +109,25 @@ contract LodestarPool is ERC4626, Ownable, ReentrancyGuard {
     ///      actually available so integrators and UIs never size an exit that reverts, and so the
     ///      revert (when a caller ignores the clamp) is the pool's own semantic error.
     function maxWithdraw(address owner_) public view override returns (uint256) {
+        if (!_oracleReady()) return 0; // exit reverts OracleDown during an outage: report 0, not a lie
         uint256 assets = super.maxWithdraw(owner_); // marked share value
         uint256 avail = available();
         return assets < avail ? assets : avail;
     }
 
     function maxRedeem(address owner_) public view override returns (uint256) {
+        if (!_oracleReady()) return 0;
         uint256 shares = super.maxRedeem(owner_);
         uint256 availShares = convertToShares(available());
         return shares < availShares ? shares : availShares;
+    }
+
+    /// @dev The withdraw/redeem path calls `syncImpairmentForExit`, which reverts `OracleDown` if any
+    ///      active loan can't be freshly priced. Mirror that in the max* views so an integrator never
+    ///      sizes an exit off a non-zero max that then reverts.
+    function _oracleReady() internal view returns (bool) {
+        address lb = loanBook;
+        return lb == address(0) ? true : ILoanBookSync(lb).oracleReady();
     }
 
     /// @dev All four ERC4626 mutators carry `nonReentrant` (defense in depth: a hookable
