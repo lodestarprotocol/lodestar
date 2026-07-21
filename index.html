@@ -404,7 +404,7 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
             <div class="pb">
               <div class="seg" id="collSeg"><button class="on" data-c="FXRP"><img src="assets/fxrp.png" class="segic">FXRP</button><button data-c="STXRP"><img src="assets/stxrp.png" class="segic">stXRP</button><button data-c="SFLR"><img src="assets/sflr.png" class="segic">sFLR</button></div>
               <div class="fld"><label>Collateral to lock <span class="bal">Balance <b id="balFXRP">—</b><button class="maxbtn" onclick="maxColl(1)">MAX</button><button class="maxbtn" onclick="maxColl(0.5)">50%</button></span></label><div class="inp"><input id="amt" type="number" value="1000" min="0"/><span class="u" id="collTag">FXRP</span></div></div>
-              <div class="fauc">No test FXRP yet? Claim it (plus C2FLR gas) from the <a href="https://faucet.flare.network/coston2" target="_blank" rel="noopener">official Flare faucet ↗</a></div>
+              <div class="fauc" id="collHint">No test FXRP yet? Claim it (plus C2FLR gas) from the <a href="https://faucet.flare.network/coston2" target="_blank" rel="noopener">official Flare faucet ↗</a></div>
               <div class="fld"><label>Term</label><div class="terms" id="terms"></div></div>
               <div class="preview">
                 <div class="prow hero"><span class="l">You receive</span><span class="r" id="q-recv">…</span></div>
@@ -652,6 +652,14 @@ const MK={
   STXRP:{img:"assets/stxrp.png",name:"stXRP",sub:"Firelight staked XRP",price:0,soon:true,feed:"XRP",rate:1.0001,hc:0.06,tiers:[{n:"Standard",d:7,ltv:40,fee:2.0},{n:"Extended",d:30,ltv:35,fee:3.5}]},
   SFLR:{img:"assets/sflr.png",name:"sFLR",sub:"Sceptre staked FLR",price:0,soon:true,feed:"FLR",rate:1.8564,hc:0.03,tiers:[{n:"Standard",d:7,ltv:45,fee:2.0},{n:"Extended",d:30,ltv:40,fee:3.5}]},
 };
+// Per-collateral hint under the picker. FXRP points at the Coston2 faucet; the LSTs point at the
+// issuer's OFFICIAL mint app (verified: Firelight URL from flare.network's launch post, Sceptre from
+// sceptre.fi). We link out instead of embedding the wrap so the dapp never touches those contracts.
+const COLL_HINT={
+  FXRP:'No test FXRP yet? Claim it (plus C2FLR gas) from the <a href="https://faucet.flare.network/coston2" target="_blank" rel="noopener">official Flare faucet ↗</a>',
+  STXRP:'Don\'t have stXRP? Wrap your FXRP into stXRP on the official <a href="https://app.firelight.finance" target="_blank" rel="noopener">Firelight app ↗</a> (Flare mainnet). It keeps earning staking yield the whole time it is locked here.',
+  SFLR:'Don\'t have sFLR? Stake FLR for sFLR on the official <a href="https://www.sceptre.fi/flare" target="_blank" rel="noopener">Sceptre app ↗</a> (Flare mainnet). It keeps earning staking yield the whole time it is locked here.',
+};
 let COLL="FXRP", TIER=0;
 const $=id=>document.getElementById(id);
 const usd=n=>"$"+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -698,7 +706,7 @@ function rows(){
 window.goBorrow=k=>{document.querySelectorAll('#collSeg button').forEach(b=>b.classList.toggle('on',b.dataset.c===k));setColl(k);location.hash="#borrow";};
 function terms(){const m=MK[COLL];$("terms").innerHTML=m.tiers.map((t,i)=>`<div class="term ${i===TIER?'on':''}" onclick="pickTier(${i})"><b>${t.n}</b><small>${t.d} days · ${t.fee}% fee</small><div class="ltv">up to ${t.ltv}% LTV</div></div>`).join("");}
 window.pickTier=i=>{TIER=i;terms();preview();};
-function setColl(k){COLL=k;TIER=0;$("collTag").textContent=MK[k].name;terms();preview();showCollBal();}
+function setColl(k){COLL=k;TIER=0;$("collTag").textContent=MK[k].name;const h=$("collHint");if(h&&COLL_HINT[k])h.innerHTML=COLL_HINT[k];terms();preview();showCollBal();}
 function preview(){const m=MK[COLL],t=m.tiers[TIER],a=parseFloat($("amt").value)||0;const val=a*m.price,pr=val*t.ltv/100,fee=pr*t.fee/100,due=new Date(Date.now()+t.d*864e5);
   $("q-recv").textContent=usd(pr-fee);$("q-fee").textContent=usd(fee);$("q-repay").textContent=usd(pr);
   $("q-due").textContent=due.toLocaleDateString('en-US',{month:"short",day:"numeric",year:"numeric"});
