@@ -611,6 +611,10 @@ const POOL="0xB19db963fB438e083E4C94588DD69CA455453472";
 const BOOK="0x2529C6a1A0aAca615d1479Ea24eB0710b9C3Bc46";
 const FXRP_ADDR="0x0b6A3645c240605887a5532109323A3E12273dc7"; // FTestXRP 6dp
 const USDT0_ADDR="0xC1A5B41512496B80903D1f32d6dEa3a73212E71F"; // USD₮0 6dp
+// Collateral token -> MK key, used to label loans and live-price their collateral.
+// Mainnet build MUST extend this with the sFLR/stXRP addresses when those tiers go live.
+const ADDR2MK={[FXRP_ADDR.toLowerCase()]:"FXRP"};
+let PORT_LOANS=[]; // open loans currently rendered: {id, sym, amt} for live collateral re-pricing
 const FEED_XRP="0x015852502f55534400000000000000000000000000", FEED_FLR="0x01464c522f55534400000000000000000000000000";
 const FTSO_ABI=["function getFeedById(bytes21) view returns (uint256 value, int8 decimals, uint64 timestamp)"];
 const POOL_ABI=["function totalAssets() view returns (uint256)","function principalOut() view returns (uint256)","function totalSupply() view returns (uint256)","function balanceOf(address) view returns (uint256)"];
@@ -758,6 +762,8 @@ async function loadChain(){
   // each collateral: feed price x staking rate x (1 - haircut), so preview matches the oracle valuation
   for(const k of Object.keys(MK)){ const m=MK[k]; const base=m.feed==="FLR"?flr:xrp; if(base) m.price=base*m.rate*(1-m.hc); }
   for(const k of Object.keys(MK)){const p=MK[k].price;if(!p)continue;for(const id of["px-"+k,"lpx-"+k]){const el=$(id);if(el)el.textContent=priceUsd(p);}}
+  // Re-price open loans' collateral in place (no innerHTML rebuild, keeps pay-down inputs intact)
+  for(const pl of PORT_LOANS){const el=$("lval-"+pl.id),p=MK[pl.sym]?.price;if(el&&p)el.textContent=usd(pl.amt*p);}
   if(r[2]) STATS.tvl=Number(r[2][0])/1e6;
   if(r[3]) STATS.borrowed=Number(r[3][0])/1e6;
   if(r[4]) STATS.ts=Number(r[4][0]);
@@ -1012,13 +1018,15 @@ async function loadPositions(){
     // one batch: nextLoanId + this wallet's pool shares
     const pre=await mc([{t:BOOK,i:IBOOK,f:"nextLoanId"},{t:POOL,i:IPOOL,f:"balanceOf",a:[account]}]);
     const n=pre[0]?Number(pre[0][0]):1; const sh=pre[1]?pre[1][0]:0n;
-    let out=""; let loanCount=0;
+    let out=""; let loanCount=0; PORT_LOANS=[];
     if(n>1){
       const calls=[]; for(let id=1;id<n;id++) calls.push({t:BOOK,i:IBOOK,f:"loans",a:[id]});
       const lr=await mc(calls);            // every loan in a single multicall
       lr.forEach((L,idx)=>{ if(!L) return; const id=idx+1;
         if(L.active && String(L.borrower).toLowerCase()===account.toLowerCase()){ const due=L.principal; loanCount++;
-          out+=`<div class="posrow"><div><b>${(Number(L.collAmount)/1e6).toLocaleString('en-US')} FXRP</b><small>borrowed ${usd(Number(L.principal)/1e6)} · repay ${usd(Number(due)/1e6)} by ${new Date(Number(L.dueAt)*1000).toLocaleDateString('en-US',{month:"short",day:"numeric",year:"numeric"})}</small></div><div class="posr"><button class="btn btn-ln btn-sm" onclick="togglePartial('${id}')">Pay down</button><button class="btn btn-red btn-sm" onclick="doRepay('${id}','${due}')">Repay</button></div></div>`;
+          const sym=ADDR2MK[String(L.collateral).toLowerCase()]||"FXRP", amt=Number(L.collAmount)/1e6, lp=MK[sym]?.price||0;
+          PORT_LOANS.push({id,sym,amt});
+          out+=`<div class="posrow"><div><b>${amt.toLocaleString('en-US')} ${sym}</b><small>worth <span id="lval-${id}">${lp?usd(amt*lp):"…"}</span> now · borrowed ${usd(Number(L.principal)/1e6)} · repay ${usd(Number(due)/1e6)} by ${new Date(Number(L.dueAt)*1000).toLocaleDateString('en-US',{month:"short",day:"numeric",year:"numeric"})}</small></div><div class="posr"><button class="btn btn-ln btn-sm" onclick="togglePartial('${id}')">Pay down</button><button class="btn btn-red btn-sm" onclick="doRepay('${id}','${due}')">Repay</button></div></div>`;
           out+=`<div id="prp-${id}" style="display:none;gap:8px;align-items:center;justify-content:flex-end;padding:0 14px 12px"><span style="font-size:12px;color:var(--ink2)">Pay down part of the debt, collateral stays locked</span><div class="inp" style="max-width:170px;padding:6px 10px;margin:0"><input id="pr-${id}" type="number" min="0" placeholder="Amount"/><span class="u">USD₮0</span></div><button class="btn btn-red btn-sm" onclick="doPartial('${id}','${L.principal}')">Confirm</button></div>`;
         }
       });
