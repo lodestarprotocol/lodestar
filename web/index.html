@@ -458,6 +458,11 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
               <div class="prow"><span class="l">Utilization ceiling</span><span class="r">80%</span></div>
               <div class="prow"><span class="l">Share price</span><span class="r" id="l-sp">1.0000</span></div>
               <div class="prow"><span class="l">Lenders</span><span class="r" id="l-lenders">…</span></div>
+              <div class="lbl" style="margin-top:18px">Collateral prices</div>
+              <div class="prow mt" style="padding-top:0"><span class="l">FXRP</span><span class="r" id="lpx-FXRP">…</span></div>
+              <div class="prow"><span class="l">stXRP</span><span class="r" id="lpx-STXRP">…</span></div>
+              <div class="prow"><span class="l">sFLR</span><span class="r" id="lpx-SFLR">…</span></div>
+              <div class="px-live" style="justify-content:flex-start;margin-top:6px"><span class="dot"></span> live · FTSOv2</div>
             </div>
             <div class="sec-h" style="margin-top:18px"><h2>Your position</h2></div>
             <div id="mylend"><div class="empty" style="padding:30px"><b>No deposit</b>Supply USD₮0 to start earning.</div></div>
@@ -752,7 +757,7 @@ async function loadChain(){
   const xrp=r[0]?px(r[0]):0, flr=r[1]?px(r[1]):0;
   // each collateral: feed price x staking rate x (1 - haircut), so preview matches the oracle valuation
   for(const k of Object.keys(MK)){ const m=MK[k]; const base=m.feed==="FLR"?flr:xrp; if(base) m.price=base*m.rate*(1-m.hc); }
-  for(const k of Object.keys(MK)){const el=$("px-"+k);if(el&&MK[k].price)el.textContent=priceUsd(MK[k].price);}
+  for(const k of Object.keys(MK)){const p=MK[k].price;if(!p)continue;for(const id of["px-"+k,"lpx-"+k]){const el=$(id);if(el)el.textContent=priceUsd(p);}}
   if(r[2]) STATS.tvl=Number(r[2][0])/1e6;
   if(r[3]) STATS.borrowed=Number(r[3][0])/1e6;
   if(r[4]) STATS.ts=Number(r[4][0]);
