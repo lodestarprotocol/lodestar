@@ -196,7 +196,7 @@ td:first-child{text-align:left}
 .prow.hero{padding-bottom:10px}
 .prow.hero .l{color:var(--ink);font-weight:600}
 .prow.hero .r{font-size:18px;color:var(--ink)}
-.badge{display:flex;align-items:center;gap:8px;background:var(--canvas);border:1px solid var(--line);color:var(--ink2);font-weight:500;font-size:12px;padding:9px 12px;border-radius:9px;margin-top:12px}
+.badge{display:block;background:var(--canvas);border:1px solid var(--line);color:var(--ink2);font-weight:500;font-size:12px;line-height:1.55;padding:9px 12px;border-radius:9px;margin-top:12px}
 .badge b{color:var(--pos);font-weight:600}
 .note{font-size:11.5px;color:var(--muted);margin-top:12px;line-height:1.55}
 .empty{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:40px;text-align:center;color:var(--muted);font-size:13px}
@@ -304,6 +304,10 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
   .topbar a.icon-btn{display:none}   /* hide secondary X link on mobile; keep theme toggle + CTA */
   #connect{padding:8px 12px}
   .toasts{left:12px;right:12px;bottom:12px;max-width:none}
+  .panel .ph{flex-wrap:wrap;row-gap:3px}
+  .fld label{flex-wrap:wrap;row-gap:5px}
+  .prow{gap:12px}
+  .prow .r{text-align:right}
 }
 </style>
 </head>
@@ -411,7 +415,7 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
                 <div class="prow"><span class="l">One-time fee, deducted upfront</span><span class="r" id="q-fee">…</span></div>
                 <div class="prow"><span class="l">Repay by deadline</span><span class="r" id="q-repay">…</span></div>
                 <div class="prow"><span class="l">Due date</span><span class="r" id="q-due">…</span></div>
-                <div class="badge">Liquidation price&nbsp; <b>None</b>, the deadline is the only trigger.</div>
+                <div class="badge"><b>No liquidation price.</b> Only the deadline can close this loan.</div>
               </div>
               <button class="btn btn-red btn-block" id="borrowBtn" style="margin-top:16px" onclick="doBorrow()">Connect wallet</button>
               <p class="note" id="q-note"></p>
@@ -444,7 +448,7 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
                 <div class="prow hero"><span class="l">Estimated net APY</span><span class="r" style="color:var(--red)">14–18%</span></div>
                 <div class="prow"><span class="l">Source</span><span class="r">borrower fees</span></div>
                 <div class="prow"><span class="l">You receive</span><span class="r" id="l-shares">0 lodUSD₮0</span></div>
-                <div class="badge"><b>Seniority</b>, lenders are repaid first on any default.</div>
+                <div class="badge"><b>Senior position.</b> Lenders are repaid first on any default.</div>
               </div>
               <button class="btn btn-red btn-block" id="lendBtn" style="margin-top:16px" onclick="doDeposit()">Connect wallet</button>
               <p class="note"><b>lodUSD₮0</b> is your deposit receipt: about 1 per USD₮0 today, and it grows in value as borrowers pay fees. Redeem it anytime for your USD₮0 plus earnings. No lockups.</p>
