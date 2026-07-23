@@ -153,6 +153,71 @@ contract LodestarV18Hardening is Test {
         assertLt(oracle.priceUsd18(address(sflr)), (5e16 * 1.1e18) / 1e18, "valuation clamped");
     }
 
+    /// @dev The clamp must never break the money paths under a spiked provider: settlement of a
+    ///      defaulted loan (lenders whole first), and the strict lender-exit sweep.
+    function test_Clamp_SettlementAndExitsStillWorkUnderSpike() public {
+        oracle.setRateClamp(address(sflr), 20);
+        // honest loan first: $5000 collateral at 45% -> 2250e6 principal
+        sflr.mint(borrower, 100_000e18);
+        vm.startPrank(borrower);
+        sflr.approve(address(book), type(uint256).max);
+        uint256 id = book.open(address(sflr), 100_000e18, 0);
+        vm.stopPrank();
+
+        // provider compromised AFTER the loan exists, then the loan defaults
+        sflrRate.set(10e18);
+        vm.warp(block.timestamp + 7 days + 48 hours + 1);
+        ftso.set(FLR, 5_000_000, 8); // fresh feed at the same FLR price
+
+        // buyout at the CLAMPED floor: valuation is ~real (not 10x), so the buyer pays ~real value,
+        // lenders are made whole from proceeds, and the pool ends the loan fully unimpaired
+        uint256 cost = book.buyoutCost(id);
+        // clamped valuation ≈ $5000 (+ ~9 days of 20bps/day allowance ≈ +1.9%), never $50,000
+        assertLt(cost, 5_300e6, "buyout priced off clamped value");
+        assertGt(cost, 4_000e6, "floor still near real value (Dutch decay from start bps)");
+        address buyer = makeAddr("buyer");
+        usdt0.mint(buyer, 6_000e6);
+        vm.startPrank(buyer);
+        usdt0.approve(address(book), type(uint256).max);
+        book.buyout(id, cost);
+        vm.stopPrank();
+        assertEq(pool.impairedLoss(), 0, "settlement true-up cleared all marks");
+        assertEq(pool.principalOut(), 0, "principal accounted");
+
+        // lender exit path still live under the spike (sweep prices off the clamped rate)
+        uint256 shares = pool.balanceOf(owner) / 10;
+        pool.redeem(shares, owner, owner);
+    }
+
+    function test_Clamp_LegitJumpIsConservativeNotBreaking() public {
+        // A LEGITIMATE sudden rate jump (e.g. a provider migration re-basing the scale) gets clamped
+        // until the owner re-arms: borrowing is under-served (conservative), but repay never depends
+        // on valuation, so an existing borrower always gets full collateral back.
+        sflr.mint(borrower, 100_000e18);
+        vm.startPrank(borrower);
+        sflr.approve(address(book), type(uint256).max);
+        uint256 id = book.open(address(sflr), 100_000e18, 0); // principal 2250e6 at rate 1.0
+        vm.stopPrank();
+
+        oracle.setRateClamp(address(sflr), 20);
+        sflrRate.set(2e18); // legit 2x re-base
+        // new borrows are conservative (clamped)…
+        sflr.mint(borrower, 100_000e18);
+        vm.startPrank(borrower);
+        uint256 id2 = book.open(address(sflr), 100_000e18, 0);
+        assertEq(_principal(id2), 2_250e6, "clamped underwriting until owner re-arms");
+        // …but repay of the existing loan is untouched (no valuation on the repay path)
+        usdt0.mint(borrower, 5_000e6);
+        usdt0.approve(address(pool), type(uint256).max);
+        book.repay(id);
+        vm.stopPrank();
+        assertEq(sflr.balanceOf(borrower), 100_000e18, "full collateral back");
+        // owner re-arms at the new real rate -> full valuation restored immediately
+        oracle.setRateClamp(address(sflr), 20);
+        (uint192 rate,) = oracle.rateAnchors(address(sflr));
+        assertEq(uint256(rate), 2e18, "re-arm re-bases the anchor");
+    }
+
     // ------------------------------------------------------------------ 2) tier disable
 
     function test_TierDisable_BlocksOpenAndReenable() public {

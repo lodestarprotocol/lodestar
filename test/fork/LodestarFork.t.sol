@@ -57,7 +57,13 @@ contract LodestarForkTest is Test {
     function setUp() public {
         // FORK_RPC lets us point at our own un-rate-limited node for heavy multi-hop swap tests
         // (the public RPC 429s on Algebra 2-hop tick traversal). Defaults to the public endpoint.
-        vm.createSelectFork(vm.envOr("FORK_RPC", string("https://flare-api.flare.network/ext/C/rpc")));
+        // FORK_BLOCK pins the fork so a PRUNED node can't garbage-collect the state mid-run (the
+        // heavy test walks >30s of storage; at `latest` the trie root moves and the node answers
+        // "missing trie node"). Unset = latest, behavior unchanged.
+        string memory rpc = vm.envOr("FORK_RPC", string("https://flare-api.flare.network/ext/C/rpc"));
+        uint256 blk = vm.envOr("FORK_BLOCK", uint256(0));
+        if (blk != 0) vm.createSelectFork(rpc, blk);
+        else vm.createSelectFork(rpc);
 
         oracle = new LodestarOracle(FA.FTSO_V2, owner);
         SceptreRateAdapter rate = new SceptreRateAdapter(FA.SFLR);
