@@ -118,11 +118,56 @@ contract LodestarV18Hardening is Test {
         // the poke may only advance the anchor along the allowed slope: 1e18 * 1.002
         (uint192 rate,) = oracle.rateAnchors(address(sflr));
         assertEq(uint256(rate), 1.002e18, "anchor ratchets at clamped value, never jumps");
-        // a poke on a slashed rate follows it DOWN immediately
+        // UP-ONLY: a poke during a slashed print must NOT bake the low into the anchor…
         sflrRate.set(0.5e18);
         oracle.pokeRateAnchor(address(sflr));
         (rate,) = oracle.rateAnchors(address(sflr));
-        assertEq(uint256(rate), 0.5e18, "anchor follows a slash down");
+        assertEq(uint256(rate), 1.002e18, "anchor holds through a down-print (up-only)");
+        // …while live valuation still follows the low raw rate immediately (min(raw, allowed))
+        ftso.set(FLR, 5_000_000, 8);
+        assertEq(oracle.priceUsd18(address(sflr)), (5e16 * 0.5e18) / 1e18, "valuation follows the slash live");
+    }
+
+    /// @dev The audit's F1 money path: one poke landing during a transient down-glitch used to
+    ///      depress the valuation CEILING for months after recovery (settlement-floor extraction
+    ///      on solvent loans). Up-only poke closes it: after recovery, valuation is fully restored.
+    function test_Clamp_TransientGlitchPlusPokeCannotDepressCeiling() public {
+        oracle.setRateClamp(address(sflr), 20);
+        uint256 base = oracle.priceUsd18(address(sflr));
+        sflrRate.set(0.5e18); // transient glitch / spoofed low print
+        oracle.pokeRateAnchor(address(sflr)); // attacker pokes DURING the glitch
+        sflrRate.set(1e18); // provider recovers
+        assertEq(oracle.priceUsd18(address(sflr)), base, "ceiling not poisoned by the glitch-poke");
+    }
+
+    /// @dev The audit's F2: allowance must not accumulate unbounded between pokes. After 100
+    ///      unpoked days a compromised provider harvests at most growth*30d (the window cap),
+    ///      never growth*100d.
+    function test_Clamp_NeglectedAllowanceIsCapped() public {
+        oracle.setRateClamp(address(sflr), 20);
+        uint256 base = oracle.priceUsd18(address(sflr));
+        vm.warp(block.timestamp + 100 days);
+        ftso.set(FLR, 5_000_000, 8);
+        sflrRate.set(10e18); // compromise after long poke neglect
+        // ceiling = anchor * (1 + 20bps * 30d) = +6%, NOT +20% (100 days of accrual)
+        assertEq(oracle.priceUsd18(address(sflr)), (base * 10_600) / 10_000, "instant harvest capped at 30d window");
+    }
+
+    /// @dev The audit's F3: re-pointing a feed at a DIFFERENT rate provider must invalidate the
+    ///      old anchor (different scale/basis) instead of silently mis-clamping the new provider.
+    function test_Clamp_ProviderChangeClearsAnchor() public {
+        oracle.setRateClamp(address(sflr), 20);
+        MockRate newProvider = new MockRate();
+        newProvider.set(5e18); // legitimately different basis
+        oracle.setFeed(address(sflr), FLR, address(newProvider), 1 hours, 0);
+        (uint192 rate,) = oracle.rateAnchors(address(sflr));
+        assertEq(uint256(rate), 0, "anchor cleared on provider change");
+        assertEq(oracle.priceUsd18(address(sflr)), (5e16 * 5e18) / 1e18, "new provider unclamped until re-arm");
+        // same-provider setFeed (e.g. haircut tweak) must NOT disturb an armed clamp
+        oracle.setRateClamp(address(sflr), 20);
+        oracle.setFeed(address(sflr), FLR, address(newProvider), 1 hours, 100);
+        (rate,) = oracle.rateAnchors(address(sflr));
+        assertEq(uint256(rate), 5e18, "same-provider re-set keeps the anchor");
     }
 
     function test_Clamp_DisarmRestoresRaw() public {
@@ -297,6 +342,41 @@ contract LodestarV18Hardening is Test {
         book.setTierDisabled(address(fxrp), 2, true); // out of range
     }
 
+    /// @dev The all-tiers-disabled corner (audit 2.1): an extension-dependent borrower loses the
+    ///      rollover path but is NEVER fund-trapped — repay, paydown, release, addCollateral and
+    ///      self-buyout all keep working. This is the documented owner-trust trade-off.
+    function test_TierDisable_AllDisabledBorrowerEscapes() public {
+        fxrp.mint(borrower, 2_000e6);
+        vm.startPrank(borrower);
+        fxrp.approve(address(book), type(uint256).max);
+        uint256 id = book.open(address(fxrp), 1_000e6, 0);
+        uint256 id2 = book.open(address(fxrp), 1_000e6, 0);
+        vm.stopPrank();
+
+        book.setTierDisabled(address(fxrp), 0, true);
+        book.setTierDisabled(address(fxrp), 1, true); // every tier retired
+
+        usdt0.mint(borrower, 4_000e6);
+        fxrp.mint(borrower, 1); // one raw unit for the addCollateral probe
+        vm.startPrank(borrower);
+        usdt0.approve(address(pool), type(uint256).max);
+        vm.expectRevert(LodestarLoanBook.BadTier.selector);
+        book.rollover(id, 0); // no extension anywhere
+        book.partialRepay(id, 100e6, 0, 0, 0); // de-risk still open
+        book.addCollateral(id, 1); // cure path still open (1 raw unit)
+        book.repay(id); // full exit still open
+        vm.stopPrank();
+
+        // and a defaulted loan can still self-settle via buyout (no bounty for self-settle)
+        vm.warp(block.timestamp + 7 days + 48 hours + 1);
+        ftso.set(XRP, 250_000_000, 8);
+        uint256 cost = book.buyoutCost(id2);
+        vm.startPrank(borrower);
+        usdt0.approve(address(book), type(uint256).max);
+        book.buyout(id2, cost);
+        vm.stopPrank();
+    }
+
     // ------------------------------------------------------------------ 3) Ownable2Step
 
     function test_TwoStep_TransferIsProposalOnly() public {
@@ -330,5 +410,20 @@ contract LodestarV18Hardening is Test {
         // and the current owner can overwrite a wrong proposal before it is ever accepted
         book.transferOwnership(owner);
         assertEq(book.pendingOwner(), owner);
+    }
+
+    function test_TwoStep_AcceptClearsPending_AndCancelWorks() public {
+        address safe = makeAddr("safe");
+        book.transferOwnership(safe);
+        vm.prank(safe);
+        book.acceptOwnership();
+        assertEq(book.pendingOwner(), address(0), "pending cleared after accept (runbook 5b check)");
+        // cancel path: proposing address(0) voids an outstanding proposal
+        vm.startPrank(safe);
+        book.transferOwnership(owner);
+        book.transferOwnership(address(0));
+        vm.stopPrank();
+        assertEq(book.pendingOwner(), address(0), "proposal cancelled");
+        assertEq(book.owner(), safe, "owner unchanged by cancel");
     }
 }
