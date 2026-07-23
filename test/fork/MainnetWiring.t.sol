@@ -50,6 +50,30 @@ contract MainnetWiringTest is Test {
         assertApproxEqRel(oracle.usdValue18(SFLR, 1e18), sflr, 1e12, "sFLR usdValue18 decimals off");
     }
 
+    /// @notice v1.8 rate clamp against the REAL Sceptre adapter on mainnet state: arming anchors at
+    ///         the live rate without moving the price, the poke works, and the clamp math holds on
+    ///         real numbers — exactly what DeployMainnet now executes at wiring time.
+    function test_MainnetRateClampArmsOnRealSceptre() public {
+        if (FTSO.code.length == 0) {
+            emit log("no fork; skipping");
+            return;
+        }
+        LodestarOracle oracle = new LodestarOracle(FTSO, address(this));
+        SceptreRateAdapter adapter = new SceptreRateAdapter(SFLR);
+        oracle.setFeed(SFLR, FEED_FLR, address(adapter), 1 hours, 300);
+
+        uint256 before = oracle.priceUsd18(SFLR);
+        oracle.setRateClamp(SFLR, 20); // what DeployMainnet does
+        (uint192 anchor,) = oracle.rateAnchors(SFLR);
+        assertEq(uint256(anchor), adapter.underlyingPerShare(), "anchor = live Sceptre rate");
+        assertEq(oracle.priceUsd18(SFLR), before, "arming must not move the price");
+
+        oracle.pokeRateAnchor(SFLR); // permissionless keeper duty works against the real provider
+        (uint192 anchor2,) = oracle.rateAnchors(SFLR);
+        assertEq(uint256(anchor2), uint256(anchor), "same-block poke is a no-op ratchet");
+        emit log_named_uint("armed anchor (sFLR->FLR, 1e18)", uint256(anchor));
+    }
+
     function test_MainnetStxrpResolvesSanePrice() public {
         if (STXRP.code.length == 0) {
             emit log("no fork; skipping");
