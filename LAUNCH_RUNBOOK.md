@@ -50,8 +50,14 @@ forge script script/TransferOwnership.s.sol:TransferOwnership \
   --private-key $(cat /c/Users/cyber/lodestar-deploy/wallets/deploy.pk) --broadcast --slow
 ```
 The script first moves the reserve OFF the hot deploy EOA (to RESERVE, default the Safe) so withdrawn
-profit + yield-skim route to the treasury, then transfers ownership and asserts all three report
-`owner() == Safe` and `reserve() == RESERVE`.
+profit + yield-skim route to the treasury, then PROPOSES the Safe as pending owner of all three
+(Ownable2Step: a typo'd address can never take ownership — the deployer stays owner until acceptance).
+It asserts `pendingOwner() == Safe` on all three and `reserve() == RESERVE`.
+
+**5b. Safe accepts ownership (completes the handoff).** From the Safe UI (any signer proposes,
+threshold signs), execute `acceptOwnership()` on ORACLE, POOL and BOOK — three transactions, no
+arguments. Then verify on-chain: `owner() == Safe` on all three and `pendingOwner() == 0x0`.
+Do NOT proceed to step 6 until all three accepts are confirmed.
 
 ## 6. Bootstrap + go live
 - Seed the lender pool with USD₮0 (the deploy already seeds any USD₮0 the deployer holds; add more via `pool.deposit`).
@@ -60,3 +66,7 @@ profit + yield-skim route to the treasury, then transfers ownership and asserts 
   keeper key in `.keeper` (chmod 600), deploy to the Netcup node under pm2 (own key, no clash with mystic).
 - Update the dapp to mainnet addresses + partial-repay UI + FAQ.
 - Wire monitoring/alerts (share price, utilization, impairment, defaults).
+- Keeper duty (new in v1.8): call `oracle.pokeRateAnchor(sFLR)` (and stXRP when enabled) ~daily to
+  ratchet the LST rate-clamp anchor forward along the real staking yield. Missing pokes is SAFE
+  (the 20 bps/day allowance is ~12x real yield, so legit growth never gets clamped for months);
+  the poke just keeps the anchor snug so a provider compromise is caught from the tightest baseline.

@@ -29,6 +29,37 @@ Only `LodestarLoanBook` can move pool funds (`onlyLoanBook`). `setLoanBook` is o
 | **Collateral-token risk** | Only owner-whitelisted collaterals (a tier must be explicitly added) are borrowable; unknown tokens revert `NotSupported`. |
 | **Stale/again-usable loan** | `active` flag flips before external calls; a settled/repaid loan can't be re-actioned. |
 
+## v1.8 — 2026-07-23 (pre-mainnet trio: rate clamp, tier retire, 2-step ownership)
+
+Closes the three accepted-risk items that did not require redesign (the fourth — the O(n)
+impairment-sweep scale ceiling — is DESIGNED but deliberately deferred; see `V2_SCALING_SPEC.md`).
+
+1. **LST rate clamp in the oracle (`setRateClamp` / `pokeRateAnchor` / `rateAnchors`).** The LST
+   rate providers (Sceptre's upgradeable proxy, Firelight's vault) are trusted EXTERNAL inputs; a
+   compromise could previously over-value collateral instantly, bounded only by the per-collateral
+   exposure cap. The valuation path (`priceUsd18`, hence LTV, settlement floor, impairment) now
+   clamps the reported rate to `anchor × (1 + 20bps/day × elapsed)`. Decreases (a real slash) pass
+   through unclamped — under-valuing is always lender-conservative. The permissionless poke
+   ratchets the anchor at the CLAMPED value, so a spiked provider can only crawl the anchor along
+   the allowed slope (~12x real sFLR yield; a compromise is capped to +0.2%/day of over-valuation).
+   `rateOf()` (yield-skim input) stays raw: the skim has its own +20% clamp and under-skimming only
+   favours the borrower. Opt-in per collateral; unarmed behavior is byte-identical to v1.7.
+2. **Tier retire (`setTierDisabled`).** Tiers stay append-only (a borrower's chosen index is
+   stable forever) but a mispriced tier can now be closed to NEW underwriting: `open` and
+   `rollover` reject a disabled index; existing loans, repay, settle and partialRepay (where a
+   referenced tier can only TIGHTEN a release standard) are untouched. Lesser owner power than
+   `setPaused`.
+3. **Ownable2Step on all three contracts.** `transferOwnership` is now proposal-only; the deployer
+   remains owner until the Safe executes `acceptOwnership()` (three Safe txs — see runbook 5b). A
+   fat-fingered handoff address can no longer orphan the protocol.
+
+Regressions: `test/security/LodestarV18Hardening.t.sol` (16 tests: spike-clamped valuation +
+over-borrow blocked end-to-end, legit-growth/slash passthrough, poke ratchet, disarm, param
+bounds, skim isolation; tier-disable across open/rollover/partial/close; 2-step transfer +
+non-pending rejection). Full non-fork suite **189/189**, run twice, including all invariant/
+stress/econ campaigns. Deploy script arms the clamp for sFLR (and stXRP when enabled) at wiring
+time; keeper gains a daily `pokeRateAnchor` duty (safe to miss for months).
+
 ## Audit pass — 2026-07-16 (findings & fixes)
 
 | # | Severity | Finding | Fix |

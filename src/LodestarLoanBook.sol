@@ -5,6 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {LodestarOracle} from "./LodestarOracle.sol";
@@ -32,7 +33,7 @@ import {LodestarPool} from "./LodestarPool.sol";
 ///           paid it and repay is principal-only.
 ///         - Stable reserve cuts and penalties accumulate in this contract as a first-loss
 ///           buffer that automatically tops up lender shortfalls at settlement.
-contract LodestarLoanBook is Ownable, ReentrancyGuard {
+contract LodestarLoanBook is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using SafeCast for uint256;
 
@@ -117,6 +118,12 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     uint64 public constant ORACLE_DOWN_DECAY = 30 days;
 
     mapping(address => Tier[]) public tiers; // per-collateral tiers
+    /// @dev Tiers are append-only (a borrower's chosen index must stay stable), but a mispriced
+    ///      tier must not stay sellable forever: disabling blocks NEW underwriting (open + rollover)
+    ///      at that index. Existing loans are untouched (their terms are snapshotted) and repay /
+    ///      partial-repay / settle never read this. Lesser power than `setPaused` (which blocks all
+    ///      new borrows); a borrower mid-term can always repay or roll into any enabled tier.
+    mapping(address => mapping(uint256 => bool)) public tierDisabled;
     mapping(address => uint256) public exposureUsd18; // outstanding principal per collateral (usd18)
     mapping(address => uint256) public exposureCapUsd18; // 0 = uncapped
     mapping(address => bool) public routerAllowed; // routers settleSwap may call
@@ -159,6 +166,7 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
     event ReserveCovered(uint256 indexed id, uint256 amount);
     event ReserveWithdrawn(address indexed to, uint256 amount);
     event TierAdded(address indexed collateral, uint16 ltvBps, uint32 duration, uint16 feeBps);
+    event TierDisabledSet(address indexed collateral, uint256 indexed tierIndex, bool disabled);
     event RouterAllowed(address indexed router, bool allowed);
     event YieldSkimmed(uint256 indexed id, address indexed collateral, uint256 amount);
 
@@ -201,6 +209,13 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         if (ltvBps > 7000 || feeBps > 2000 || duration == 0 || duration > maxLoanLife) revert BadParam();
         tiers[collateral].push(Tier(ltvBps, duration, feeBps));
         emit TierAdded(collateral, ltvBps, duration, feeBps);
+    }
+
+    /// @notice Disable (or re-enable) a tier for NEW loans and rollovers. See `tierDisabled`.
+    function setTierDisabled(address collateral, uint256 tierIndex, bool disabled) external onlyOwner {
+        if (tierIndex >= tiers[collateral].length) revert BadParam();
+        tierDisabled[collateral][tierIndex] = disabled;
+        emit TierDisabledSet(collateral, tierIndex, disabled);
     }
 
     function setExposureCap(address collateral, uint256 capUsd18) external onlyOwner {
@@ -361,6 +376,7 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         Tier[] storage ts = tiers[collateral];
         if (ts.length == 0) revert NotSupported();
         if (tierIndex >= ts.length) revert BadTier();
+        if (tierDisabled[collateral][tierIndex]) revert BadTier(); // retired tier: no NEW underwriting
         Tier memory t = ts[tierIndex];
 
         // Measure actually-received collateral (fee-on-transfer / non-standard token safe).
@@ -586,6 +602,10 @@ contract LodestarLoanBook is Ownable, ReentrancyGuard {
         if (block.timestamp > L.dueAt) revert Expired();
         Tier[] storage ts = tiers[L.collateral];
         if (tierIndex >= ts.length) revert BadTier();
+        // A rollover re-underwrites at this tier, so a retired tier can't be extended into either.
+        // (partialRepay's tierIndex is deliberately NOT gated: there it can only TIGHTEN a release
+        // standard via min(openLtv, chosen), never underwrite new risk.)
+        if (tierDisabled[L.collateral][tierIndex]) revert BadTier();
 
         uint256 collValue18 = oracle.usdValue18(L.collateral, L.collAmount);
         _cachePrice(L.collateral, collValue18, L.collAmount);
