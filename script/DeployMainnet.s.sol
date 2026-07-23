@@ -70,7 +70,7 @@ contract DeployMainnet is Script {
     uint256 constant SEED_MIN = 10e6; // $10 minimum first-deposit seed; deploy reverts if unseeded
     // GUARDED LAUNCH: tiny per-collateral borrow cap bounds the MAX possible loss from any tail risk
     // (incl. the sFLR rate provider being upgradeable by a single external EOA) to the cap size — a
-    // cleaner, zero-code-change mitigation than an oracle rate-clamp. Multisig raises it via
+    // $-bound that composes with the v1.8 oracle rate-clamp (slope-bound). Multisig raises it via
     // setExposureCap as confidence grows (25k -> 50k -> ...). Aave-style cap-guardian launch.
     uint256 constant CAP_LAUNCH_USD18 = 25_000e18;
 

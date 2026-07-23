@@ -38,27 +38,44 @@ impairment-sweep scale ceiling — is DESIGNED but deliberately deferred; see `V
    rate providers (Sceptre's upgradeable proxy, Firelight's vault) are trusted EXTERNAL inputs; a
    compromise could previously over-value collateral instantly, bounded only by the per-collateral
    exposure cap. The valuation path (`priceUsd18`, hence LTV, settlement floor, impairment) now
-   clamps the reported rate to `anchor × (1 + 20bps/day × elapsed)`. Decreases (a real slash) pass
-   through unclamped — under-valuing is always lender-conservative. The permissionless poke
-   ratchets the anchor at the CLAMPED value, so a spiked provider can only crawl the anchor along
-   the allowed slope (~12x real sFLR yield; a compromise is capped to +0.2%/day of over-valuation).
-   `rateOf()` (yield-skim input) stays raw: the skim has its own +20% clamp and under-skimming only
-   favours the borrower. Opt-in per collateral; unarmed behavior is byte-identical to v1.7.
+   clamps the reported rate to `anchor × (1 + growthBpsPerDay × min(elapsed, 30 days))`. The slope
+   is owner-set per collateral (contract-bounded ≤ 500 = 5%/day; 0 disarms); launch arms 20 bps/day
+   (~12x real sFLR yield). The 30-day allowance window caps a compromise's INSTANT harvest at
+   `slope × 30d` (6% at launch slope) no matter how long pokes lapse. The permissionless poke
+   ratchets the anchor UP-ONLY at the clamped value and resets the window — up-only because live
+   valuation already follows any rate decrease on every read, so a down-ratchet would add zero
+   conservatism while letting one transient/spoofed low print depress the valuation ceiling for
+   months (a settlement-floor extraction window; adversarial audit F1). Re-pointing a feed at a
+   DIFFERENT provider auto-disarms the clamp (stale-anchor/scale mismatch; F3). Rate DECREASES
+   pass through unclamped — conservative on every underwriting/impairment path; note honestly that
+   a spoofed slash still lowers the settlement floor (residual provider-trust risk, pre-existing
+   and unchanged by the clamp). `rateOf()` (yield-skim input) stays raw: the skim has its own +20%
+   clamp and under-skimming only favours the borrower. Opt-in per collateral; unarmed behavior is
+   return-value-identical to v1.7.
 2. **Tier retire (`setTierDisabled`).** Tiers stay append-only (a borrower's chosen index is
    stable forever) but a mispriced tier can now be closed to NEW underwriting: `open` and
    `rollover` reject a disabled index; existing loans, repay, settle and partialRepay (where a
-   referenced tier can only TIGHTEN a release standard) are untouched. Lesser owner power than
-   `setPaused`.
+   referenced tier can only TIGHTEN a release standard) are untouched. HONEST POWER ACCOUNTING:
+   this is NOT strictly weaker than pause — with every tier of a collateral disabled, an
+   extension-dependent borrower loses the rollover path and must repay or accept default (penalty
+   = frozen penaltyBps). Funds are never trapped (repay/paydown/release/addCollateral/self-buyout
+   all keep working), and the owner already holds strictly stronger levers (setFeed), but the
+   trade-off is stated, not hidden.
 3. **Ownable2Step on all three contracts.** `transferOwnership` is now proposal-only; the deployer
    remains owner until the Safe executes `acceptOwnership()` (three Safe txs — see runbook 5b). A
-   fat-fingered handoff address can no longer orphan the protocol.
+   fat-fingered handoff can no longer ORPHAN the protocol (a dead address can't accept); a wrong-
+   but-live contract address could still accept, so the runbook requires independently verifying
+   the Safe (signers + threshold) before 5b.
 
-Regressions: `test/security/LodestarV18Hardening.t.sol` (16 tests: spike-clamped valuation +
-over-borrow blocked end-to-end, legit-growth/slash passthrough, poke ratchet, disarm, param
-bounds, skim isolation; tier-disable across open/rollover/partial/close; 2-step transfer +
-non-pending rejection). Full non-fork suite **189/189**, run twice, including all invariant/
-stress/econ campaigns. Deploy script arms the clamp for sFLR (and stXRP when enabled) at wiring
-time; keeper gains a daily `pokeRateAnchor` duty (safe to miss for months).
+Regressions: `test/security/LodestarV18Hardening.t.sol` (23 tests: spike-clamped valuation +
+over-borrow blocked end-to-end, legit-growth/slash passthrough, up-only poke + glitch-poke ceiling
+protection + neglect-cap + provider-change disarm, settlement/exits under spike, legit re-base,
+disarm, param bounds, skim isolation; tier-disable across open/rollover/partial/close incl. the
+all-disabled borrower-escape corner; 2-step transfer both ways + pending-cleared + cancel). Full
+non-fork suite **196/196** including all invariant/stress/econ campaigns; fork suite passing on
+live Flare mainnet incl. arming the clamp on the real Sceptre adapter. Deploy script arms the
+clamp for sFLR (and stXRP when enabled) at wiring time; keeper gains a `pokeRateAnchor` duty
+(missing pokes never endangers lenders — see runbook note for the quantified trade-off).
 
 ## Audit pass — 2026-07-16 (findings & fixes)
 
@@ -260,13 +277,14 @@ SparkDEX V3.1 router** (`test_fork_SettleSwapThroughRealSparkDEX`).
   - **Short-timelock:** `withdrawReserve` (now also settlement-aware), `setReserve`, `keeperCapUsd18`, `setRiskParams`, `setRouterAllowed`.
   - **Hot is acceptable:** `setPaused`, `setMaxUtilization` (cannot trap lenders — redeem isn't gated by it).
   - Set a **non-zero `exposureCap` at launch** (done in deploy) so a compromised key can't over-borrow unbounded.
-- [ ] Real Flare wiring: FTSOv2 registry, XRP/USD + FLR/USD feed IDs, Sceptre/Firelight rate providers (+ rate-of-change bound + haircut), USDT0 + FXRP token addresses
-- [x] **Fork tests** against live Flare (FTSO reads, real sFLR rate, real SparkDEX settlement)
-- [x] Two adversarial review rounds (9 agents total), all findings fixed or documented
-- [ ] Marking keeper for the phantom-solvency window
-- [ ] Per-loan **position NFT** + partial repayment
-- [ ] External audit
+- [x] Real Flare wiring: FTSOv2 registry, XRP/USD + FLR/USD feed IDs, Sceptre/Firelight rate providers (rate-of-change bound = v1.8 clamp; haircuts set), USDT0 + FXRP token addresses — all in DeployMainnet, fork-verified
+- [x] **Fork tests** against live Flare (FTSO reads, real sFLR rate, real SparkDEX settlement, v1.8 clamp armed on real Sceptre)
+- [x] Adversarial review rounds (7+ internal rounds), all findings fixed or documented
+- [x] Marking keeper for the phantom-solvency window (lodestar-keeper; on-chain exit sweep since v1.5 makes it optional)
+- [x] Partial repayment (v1.7-era, 16+ tests); per-loan **position NFT** deferred to a peripheral wrapper (unproven demand)
+- [ ] External audit (Pashov — pricing pending; scope = latest pushed commit)
 - [ ] Optional: withdrawal queue / exit fee; USDT0 band-check
 
-**Status: deployed to Coston2 testnet (v1.4). Two internal adversarial rounds complete; no external
-audit yet. Not on mainnet. Do not send mainnet funds.**
+**Status: deployed to Coston2 testnet (v1.7 contracts; v1.8 hardening is repo-HEAD, not yet
+redeployed to testnet). Internal review complete; no external audit yet. Not on mainnet. Do not
+send mainnet funds.**

@@ -4,7 +4,9 @@ Ordered steps. Nothing here is irreversible until step 5. The deploy script refu
 unverified (immutable) address, so a wrong token/feed cannot slip through.
 
 ## 0. Prerequisites (in progress)
-- [x] External audit complete.
+- [x] Internal security review complete (7 rounds; report filed at `Desktop/lodestar-audit/`).
+- [ ] External audit (Pashov) — pricing pending; scope pins to the latest pushed commit. Launch
+      before it lands is a conscious risk decision, not a checked box.
 - [x] Deploy wallet `0x59b7fb215e9C73A25B358929462A107E1fEc5088` (vanity, ends 88). Key sealed in
       `C:\Users\cyber\lodestar-deploy\wallets\deploy.pk` (never printed).
 - [ ] **Fund the deploy wallet with FLR** (send to the address above; gas for ~3 deploys + wiring, ~50-100 FLR is ample).
@@ -43,6 +45,7 @@ Record the printed Oracle / Pool / Book addresses.
 
 ## 5. Hand ownership to the Safe (point of no return)
 ```
+export DEPLOYER=0x59b7fb215e9C73A25B358929462A107E1fEc5088   # the script hard-requires this env
 export ORACLE=0x... POOL=0x... BOOK=0x... MULTISIG=0x<safe>
 export RESERVE=0x<treasury>   # optional: revenue destination; defaults to the Safe
 forge script script/TransferOwnership.s.sol:TransferOwnership \
@@ -54,9 +57,14 @@ profit + yield-skim route to the treasury, then PROPOSES the Safe as pending own
 (Ownable2Step: a typo'd address can never take ownership — the deployer stays owner until acceptance).
 It asserts `pendingOwner() == Safe` on all three and `reserve() == RESERVE`.
 
-**5b. Safe accepts ownership (completes the handoff).** From the Safe UI (any signer proposes,
-threshold signs), execute `acceptOwnership()` on ORACLE, POOL and BOOK — three transactions, no
-arguments. Then verify on-chain: `owner() == Safe` on all three and `pendingOwner() == 0x0`.
+**5b. Safe accepts ownership (completes the handoff).** BEFORE accepting, independently verify the
+Safe address is the intended one (open it in the Safe UI: check signers + threshold = our 3-of-5) —
+two-step prevents ORPHANING (a dead address can't accept), but a wrong-but-live contract could
+still accept, so the verification is on us. Then from the Safe UI (any signer proposes, threshold
+signs), execute `acceptOwnership()` on ORACLE, POOL and BOOK — three transactions, no arguments.
+Verify on-chain: `owner() == Safe` on all three and `pendingOwner() == 0x0`.
+⚠️ Between step 5 and 5b the deployer MUST NOT call `renounceOwnership()` — it would zero the
+owner AND void the Safe's pending claim, permanently orphaning all three contracts.
 Do NOT proceed to step 6 until all three accepts are confirmed.
 
 ## 6. Bootstrap + go live
@@ -66,7 +74,10 @@ Do NOT proceed to step 6 until all three accepts are confirmed.
   keeper key in `.keeper` (chmod 600), deploy to the Netcup node under pm2 (own key, no clash with mystic).
 - Update the dapp to mainnet addresses + partial-repay UI + FAQ.
 - Wire monitoring/alerts (share price, utilization, impairment, defaults).
-- Keeper duty (new in v1.8): call `oracle.pokeRateAnchor(sFLR)` (and stXRP when enabled) ~daily to
-  ratchet the LST rate-clamp anchor forward along the real staking yield. Missing pokes is SAFE
-  (the 20 bps/day allowance is ~12x real yield, so legit growth never gets clamped for months);
-  the poke just keeps the anchor snug so a provider compromise is caught from the tightest baseline.
+- Keeper duty (new in v1.8): call `oracle.pokeRateAnchor(sFLR)` (and stXRP when enabled) ~daily
+  (weekly is fine) to ratchet the LST rate-clamp anchor forward. Quantified trade-offs of missed
+  pokes — lenders are NEVER endangered by neglect: (a) a compromised provider's instant harvest is
+  hard-capped at slope × 30d window = **6%** at the launch slope regardless of neglect (and always
+  $-bounded by the exposure cap); (b) legitimate sFLR yield (~6%/yr) only starts getting clamped
+  (= conservative under-valuation, new borrows under-served) after roughly **a year** of zero
+  pokes; an owner re-arm fixes it instantly. Pokes are up-only: they can never lower the anchor.

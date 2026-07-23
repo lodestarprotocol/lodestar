@@ -121,8 +121,13 @@ contract LodestarLoanBook is Ownable2Step, ReentrancyGuard {
     /// @dev Tiers are append-only (a borrower's chosen index must stay stable), but a mispriced
     ///      tier must not stay sellable forever: disabling blocks NEW underwriting (open + rollover)
     ///      at that index. Existing loans are untouched (their terms are snapshotted) and repay /
-    ///      partial-repay / settle never read this. Lesser power than `setPaused` (which blocks all
-    ///      new borrows); a borrower mid-term can always repay or roll into any enabled tier.
+    ///      partial-repay / settle never read this. HONEST POWER ACCOUNTING: unlike `setPaused`
+    ///      (which blocks only `open`), disabling can also block a ROLLOVER a borrower was counting
+    ///      on — with every tier of a collateral disabled, an extension-dependent borrower must
+    ///      repay in full or accept default (losing the frozen penaltyBps of principal; funds are
+    ///      never trapped: repay, pure-paydown, collateral release, addCollateral and self-buyout
+    ///      all keep working). This is an owner-trust lever like setFeed — the multisig already
+    ///      holds strictly stronger levers — but it is NOT strictly weaker than pause.
     mapping(address => mapping(uint256 => bool)) public tierDisabled;
     mapping(address => uint256) public exposureUsd18; // outstanding principal per collateral (usd18)
     mapping(address => uint256) public exposureCapUsd18; // 0 = uncapped

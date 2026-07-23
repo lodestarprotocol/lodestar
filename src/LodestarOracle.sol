@@ -40,6 +40,15 @@ contract LodestarOracle is Ownable2Step {
     mapping(address => RateAnchor) public rateAnchors;
     mapping(address => uint16) public rateGrowthBpsPerDay; // allowed upside slope while armed
 
+    /// @dev Allowance-accrual cap: the clamp ceiling grows at most `growthBpsPerDay × 30 days`
+    ///      above the anchor no matter how long pokes lapse. Without this, a long-unpoked clamp
+    ///      accumulates an unbounded bucket a compromised provider could harvest in ONE block
+    ///      (e.g. a year unpoked at 20 bps/day = +73% instantly). With it, the worst instant
+    ///      over-valuation is growthBpsPerDay×30d (0.2%/day launch slope -> 6%) — and the cost of
+    ///      neglect is only that genuinely-accrued LST yield beyond the cap values conservatively
+    ///      low until a poke/re-arm (lender-safe direction).
+    uint64 public constant MAX_CLAMP_WINDOW = 30 days;
+
     event FeedSet(address indexed token, bytes21 feedId, address rateProvider, uint64 maxStale, uint16 haircutBps);
     event RateClampSet(address indexed token, uint16 growthBpsPerDay, uint256 anchorRate);
     event RateAnchorPoked(address indexed token, uint256 anchorRate);
@@ -67,6 +76,14 @@ contract LodestarOracle is Ownable2Step {
         // generous; anything longer has no legitimate use and is a crash-window over-borrow risk.
         if (maxStale == 0 || maxStale > 1 hours) revert BadParam();
         if (haircutBps > 5000) revert BadParam();
+        // Changing the rate provider invalidates an armed anchor: the new provider may use a
+        // different scale/basis, and silently clamping it against the OLD provider's anchor would
+        // mis-value everything until someone noticed. Force a deliberate re-arm instead.
+        if (rateAnchors[token].rate != 0 && feeds[token].rateProvider != rateProvider) {
+            delete rateAnchors[token];
+            delete rateGrowthBpsPerDay[token];
+            emit RateClampSet(token, 0, 0);
+        }
         feeds[token] = Feed(feedId, rateProvider, IERC20Metadata(token).decimals(), maxStale, haircutBps, true);
         emit FeedSet(token, feedId, rateProvider, maxStale, haircutBps);
     }
@@ -97,27 +114,39 @@ contract LodestarOracle is Ownable2Step {
         emit RateClampSet(token, growthBpsPerDay, rate);
     }
 
-    /// @notice Ratchet an armed clamp's anchor to the CURRENT CLAMPED rate (permissionless — a
-    ///         keeper calls this periodically). Because the new anchor is the clamped value, a
-    ///         spiked provider can only advance the anchor along the allowed slope, never jump it;
-    ///         a decreased rate (slash) lowers the anchor immediately.
+    /// @notice Ratchet an armed clamp's anchor to the CURRENT CLAMPED rate — UP-ONLY — and reset
+    ///         the allowance window (permissionless; a keeper calls this periodically). Because the
+    ///         new anchor is the clamped value, a spiked provider can only advance the anchor along
+    ///         the allowed slope, never jump it.
+    /// @dev UP-ONLY is deliberate: live valuation already follows any rate DECREASE on every read
+    ///      (`min(raw, allowed)`), so lowering the anchor here would add zero conservatism — it
+    ///      would only let a single transient/spoofed low print (one poke lands during a provider
+    ///      glitch) depress the valuation CEILING for months after the rate recovers, opening a
+    ///      settlement-floor extraction window on solvent loans. Permanently re-basing the anchor
+    ///      down after a real slash stays an owner act (`setRateClamp`), same trust level as setFeed.
     function pokeRateAnchor(address token) external {
         Feed memory f = feeds[token];
         if (!f.set || f.rateProvider == address(0)) revert BadParam();
-        if (rateAnchors[token].rate == 0) revert BadParam(); // not armed
+        RateAnchor memory a = rateAnchors[token];
+        if (a.rate == 0) revert BadParam(); // not armed
         uint256 raw = ILstRateProvider(f.rateProvider).underlyingPerShare();
         if (raw == 0) revert BadPrice();
         uint256 accepted = _clampedRate(token, raw);
+        if (accepted < a.rate) accepted = a.rate; // up-only (see @dev); ts still refreshes = allowance resets
+        if (accepted > type(uint192).max) revert BadPrice(); // mirror setRateClamp's truncation guard
         rateAnchors[token] = RateAnchor(uint192(accepted), uint64(block.timestamp));
         emit RateAnchorPoked(token, accepted);
     }
 
-    /// @dev min(raw, anchor + anchor * growth * elapsed). Unarmed (anchor 0) passes raw through.
+    /// @dev min(raw, anchor + anchor * growth * min(elapsed, MAX_CLAMP_WINDOW)).
+    ///      Unarmed (anchor 0) passes raw through.
     function _clampedRate(address token, uint256 raw) internal view returns (uint256) {
         RateAnchor memory a = rateAnchors[token];
         if (a.rate == 0) return raw;
-        uint256 allowed = uint256(a.rate)
-            + (uint256(a.rate) * rateGrowthBpsPerDay[token] * (block.timestamp - a.ts)) / (10_000 * 1 days);
+        uint256 elapsed = block.timestamp - a.ts;
+        if (elapsed > MAX_CLAMP_WINDOW) elapsed = MAX_CLAMP_WINDOW;
+        uint256 allowed =
+            uint256(a.rate) + (uint256(a.rate) * rateGrowthBpsPerDay[token] * elapsed) / (10_000 * 1 days);
         return raw > allowed ? allowed : raw;
     }
 
