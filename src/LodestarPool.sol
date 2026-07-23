@@ -7,6 +7,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 interface ILoanBookSync {
@@ -21,7 +22,7 @@ interface ILoanBookSync {
 ///         lifting the share price. Loans draw from and repay into this pool.
 /// @dev Custody of principal-in-flight is tracked via `principalOut` so the share price
 ///      stays continuous while funds are lent. Only the LoanBook may move funds.
-contract LodestarPool is ERC4626, Ownable, ReentrancyGuard {
+contract LodestarPool is ERC4626, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     address public loanBook;

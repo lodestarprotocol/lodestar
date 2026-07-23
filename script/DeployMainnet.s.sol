@@ -65,6 +65,7 @@ contract DeployMainnet is Script {
     uint64 constant MAX_STALE = 15 minutes; // FTSO updates ~90s; bound <= 1h
     uint16 constant HAIRCUT_LST = 300; // 3% haircut on sFLR (can trade under NAV); FXRP = 0 (1:1)
     uint16 constant STXRP_HAIRCUT = 600; // 6% on stXRP: newer Firelight vault -> extra conservatism
+    uint16 constant RATE_CLAMP_BPS_PER_DAY = 20; // LST valuation-rate growth allowance (see setRateClamp)
     uint128 constant MIN_PRINCIPAL = 100e6; // $100 floor: prices out slot-exhaustion of maxActiveLoans
     uint256 constant SEED_MIN = 10e6; // $10 minimum first-deposit seed; deploy reverts if unseeded
     // GUARDED LAUNCH: tiny per-collateral borrow cap bounds the MAX possible loss from any tail risk
@@ -97,6 +98,10 @@ contract DeployMainnet is Script {
             address sflrRate = SFLR_RATE;
             if (sflrRate == address(0)) sflrRate = address(new SceptreRateAdapter(SFLR));
             oracle.setFeed(SFLR, FEED_FLR, sflrRate, MAX_STALE, HAIRCUT_LST);
+            // Arm the valuation-side rate limiter: real sFLR yield is ~1.7 bps/day, so 20 bps/day
+            // gives >10x headroom while capping a compromised Sceptre provider to +0.2%/day of
+            // over-valuation. Keeper pokes the anchor forward periodically (see keeper duties).
+            oracle.setRateClamp(SFLR, RATE_CLAMP_BPS_PER_DAY);
             console.log("sFLR rate adapter", sflrRate);
         }
         if (STXRP != address(0)) {
@@ -104,6 +109,7 @@ contract DeployMainnet is Script {
             address stxrpRate = STXRP_RATE;
             if (stxrpRate == address(0)) stxrpRate = address(new FirelightRateAdapter(STXRP));
             oracle.setFeed(STXRP, FEED_XRP, stxrpRate, MAX_STALE, STXRP_HAIRCUT);
+            oracle.setRateClamp(STXRP, RATE_CLAMP_BPS_PER_DAY); // same rate limiter for the Firelight vault
             console.log("stXRP rate adapter", stxrpRate);
         }
 
