@@ -588,6 +588,10 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
             <div class="a">One flat fee, deducted from the amount you receive: borrow at 2% for a 7-day term or 3.5% for 30 days, and repayment is exactly the principal, nothing more. No accruing interest, no variable rate that spikes while you sleep, no funding payments. You know the full cost of the loan before you open it.</div>
           </details>
           <details>
+            <summary>Isn't 2% a week a huge APR?</summary>
+            <div class="a">Annualized it is about 104%, and that framing misses what the fee buys. Interest is the price of borrowing time. This fee is mostly the price of an option [the built-in right to walk away]: for the whole term no crash can liquidate you, and if the price collapses you can keep the borrowed USD₮0 and hand over only the collateral. Lenders carry that tail risk, and the fee is their premium for writing it. Compare it where it belongs: realized no-liquidation fixed-term deals elsewhere run 85 to 104% APY for 30 days, ours is 3.5% flat, roughly 43% annualized. Variable-rate money markets are cheaper precisely because they can liquidate you on a one-minute wick; that discount exists because you are the one carrying the risk there. And if you want a lower daily cost, the 30-day term works out to about 0.12% per day versus 0.29% on the 7-day. Launch pricing is deliberately careful: as real loss data accrues on mainnet, fees come down, not up.</div>
+          </details>
+          <details>
             <summary>Can I extend my loan?</summary>
             <div class="a">Yes. Any time before your deadline, hit <b>Extend</b> on your loan in Portfolio: you pay another term's fee and the deadline pushes out by that term's duration, while the borrowed USD₮0 stays in your wallet. The position has to still meet its LTV at current prices to extend (the panel shows exactly how much collateral to top up if it fell), and total loan life is capped at 90 days from open. Past 90 days you repay and open a fresh loan.</div>
           </details>
@@ -732,7 +736,7 @@ function rows(){
     </tr>`;}).join("");
 }
 window.goBorrow=k=>{document.querySelectorAll('#collSeg button').forEach(b=>b.classList.toggle('on',b.dataset.c===k));setColl(k);location.hash="#borrow";};
-function terms(){const m=MK[COLL];$("terms").innerHTML=m.tiers.map((t,i)=>`<div class="term ${i===TIER?'on':''}" onclick="pickTier(${i})"><b>${t.n}</b><small>${t.d} days · ${t.fee}% fee</small><div class="ltv">up to ${t.ltv}% LTV</div></div>`).join("");}
+function terms(){const m=MK[COLL];$("terms").innerHTML=m.tiers.map((t,i)=>`<div class="term ${i===TIER?'on':''}" onclick="pickTier(${i})"><b>${t.n}</b><small>${t.d} days · ${t.fee}% fee · ≈${(t.fee/t.d).toFixed(2)}%/day</small><div class="ltv">up to ${t.ltv}% LTV</div></div>`).join("");}
 window.pickTier=i=>{TIER=i;terms();preview();};
 function setColl(k){COLL=k;TIER=0;$("collTag").textContent=MK[k].name;const h=$("collHint");if(h&&COLL_HINT[k])h.innerHTML=COLL_HINT[k];terms();preview();showCollBal();}
 function preview(){const m=MK[COLL],t=m.tiers[TIER],a=parseFloat($("amt").value)||0;const val=a*m.price,pr=val*t.ltv/100,fee=pr*t.fee/100,due=new Date(Date.now()+t.d*864e5);
