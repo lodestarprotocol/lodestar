@@ -1038,7 +1038,7 @@ window.renderExtend=async(id)=>{
     // number the contract's LTV re-check uses) + chain time + up to 4 tier defs + retired flags.
     // tierDisabled only exists from v1.8 — on the v1.7 testnet book the probe fails and decodes to
     // undefined, which we treat as "not retired" (allowFailure=true makes this forward-compatible).
-    const P=4, calls=[
+    const P=6, calls=[
       {t:BOOK,i:IBOOK,f:"tierCount",a:[L.collateral]},
       {t:BOOK,i:IBOOK,f:"maxLoanLife"},
       {t:ORACLE,i:IORC,f:"usdValue18",a:[L.collateral,L.collAmount]},
@@ -1070,13 +1070,18 @@ window.renderExtend=async(id)=>{
       else if(newDue>lifeEnd) why=`Would pass the ${Math.round(maxLife/86400)}-day maximum loan life (this loan's hard limit is ${fmtDate(lifeEnd)}). Repay and open a fresh loan instead.`;
       else if(collVal===null) why="Price feed is briefly unavailable, try again shortly.";
       else if(collVal*ltv/10000n<pUsd18){ // exact contract check: floor(collValue18*ltv/1e4) < principalAsUsd18
-        anyLtv=true;
-        const needVal=(pUsd18*10000n+ltv-1n)/ltv-collVal;                 // usd18 still missing, ceil
-        const tokRaw=(needVal*L.collAmount+collVal-1n)/collVal;           // raw collateral units, ceil
-        const withMargin=tokRaw*101n/100n+1n;                             // +1% so a small price move can't fail the tx
-        const disp=Math.ceil(Number(withMargin)/10**cdec*100)/100;
-        if(minTop===null||disp<minTop) minTop=disp;
-        why=`Needs about ${disp.toLocaleString('en-US')} more ${L.sym} collateral at current prices to qualify. Top it up below, then extend.`;
+        // guard the divisions below: a 0-LTV tier (addTier allows it) or an unvaluable position must
+        // degrade to a per-tier reason, never throw and take the whole panel down with it
+        if(ltv===0n||collVal===0n) why="This term can't be extended into for this position.";
+        else{
+          anyLtv=true;
+          const needVal=(pUsd18*10000n+ltv-1n)/ltv-collVal;               // usd18 still missing, ceil
+          const tokRaw=(needVal*L.collAmount+collVal-1n)/collVal;         // raw collateral units, ceil
+          const withMargin=tokRaw*101n/100n+1n;                           // +1% so a small price move can't fail the tx
+          const disp=Math.ceil(Number(withMargin)/10**cdec*100)/100;
+          if(minTop===null||disp<minTop) minTop=disp;
+          why=`Needs about ${disp.toLocaleString('en-US')} more ${L.sym} collateral at current prices to qualify. Top it up below, then extend.`;
+        }
       }
       if(!why) rowsH+=`<div class="exopt"><span>${meta}</span><button class="btn btn-red btn-sm" onclick="doExtend('${id}',${i},'${fee}',${newDue})">Extend</button></div>`;
       else rowsH+=`<div class="exopt off"><span>${meta}<small>${why}</small></span></div>`;
@@ -1111,6 +1116,8 @@ window.doTopUp=async(id)=>{
     if(await tok.allowance(account,BOOK)<amt){ toast("Approve "+L.sym+"…"); await (await tok.approve(BOOK,amt)).wait(); }
     toast("Adding collateral…"); await (await sendTx(book,"addCollateral",BigInt(id),amt)).wait();
     L.collAmount=L.collAmount+amt;
+    // keep the live "worth $X now" row truthful without a full loadPositions (which would close this panel)
+    const pl=PORT_LOANS.find(x=>String(x.id)===String(id)); if(pl) pl.amt=Number(L.collAmount)/10**(CDEC[L.sym]||6);
     toast("Collateral added.","ok"); renderExtend(id); loadChain(); fetchBalances();
   }catch(e){ console.error(e); toast("Top-up failed: "+friendlyErr(e),"err"); }
 };
