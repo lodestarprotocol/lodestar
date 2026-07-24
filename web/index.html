@@ -244,8 +244,12 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
 .wopt:hover{border-color:var(--red);background:var(--hover)}
 .wopt img{width:24px;height:24px;border-radius:6px}
 .wfoot{padding:11px 18px;border-top:1px solid var(--line);font-size:11px;color:var(--muted);text-align:center}
-.posrow{display:flex;justify-content:space-between;align-items:center;padding:13px 15px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;background:var(--card)}
+.posrow{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:13px 15px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;background:var(--card)}
 .posrow b{font-size:13.5px;font-weight:650}.posrow small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
+.posr{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;align-items:center}
+.exopt{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:8px;font-size:12.5px;color:var(--ink2);background:var(--card)}
+.exopt.off{opacity:.6}
+.exopt small{display:block;color:var(--muted);font-size:11.5px;margin-top:2px}
 .posr{display:flex;align-items:center;gap:12px}
 .btn:disabled{opacity:.6;cursor:default}
 .wsub{padding:0 18px 4px;font-size:11.5px;color:var(--muted)}
@@ -585,7 +589,7 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
           </details>
           <details>
             <summary>Can I extend my loan?</summary>
-            <div class="a">Yes. Any time before your deadline you can roll the loan over by paying another tier fee, which pushes the deadline out by that tier's duration. The position has to still meet its LTV at current prices to extend (top up collateral if it fell), and total loan life is capped at 90 days from open.</div>
+            <div class="a">Yes. Any time before your deadline, hit <b>Extend</b> on your loan in Portfolio: you pay another term's fee and the deadline pushes out by that term's duration, while the borrowed USD₮0 stays in your wallet. The position has to still meet its LTV at current prices to extend (the panel shows exactly how much collateral to top up if it fell), and total loan life is capped at 90 days from open. Past 90 days you repay and open a fresh loan.</div>
           </details>
           <details>
             <summary>Is there a protocol token?</summary>
@@ -619,20 +623,28 @@ const USDT0_ADDR="0xC1A5B41512496B80903D1f32d6dEa3a73212E71F"; // USD₮0 6dp
 // Mainnet build MUST extend this with the sFLR/stXRP addresses when those tiers go live.
 const ADDR2MK={[FXRP_ADDR.toLowerCase()]:"FXRP"};
 let PORT_LOANS=[]; // open loans currently rendered: {id, sym, amt} for live collateral re-pricing
+let EXT={};        // full loan data for the Extend panel, keyed by id (BigInts kept as BigInt)
+// collateral token decimals per market. FXRP/stXRP are 6dp; sFLR is 18dp on mainnet — every
+// raw-unit conversion below goes through this map, never a hardcoded 1e6.
+const CDEC={FXRP:6,STXRP:6,SFLR:18};
 const FEED_XRP="0x015852502f55534400000000000000000000000000", FEED_FLR="0x01464c522f55534400000000000000000000000000";
 const FTSO_ABI=["function getFeedById(bytes21) view returns (uint256 value, int8 decimals, uint64 timestamp)"];
 const POOL_ABI=["function totalAssets() view returns (uint256)","function principalOut() view returns (uint256)","function totalSupply() view returns (uint256)","function balanceOf(address) view returns (uint256)"];
 // testnet seed lenders (fresh faucet wallets that supplied USD₮0); lender count = how many still hold shares
 const SEED_LP=["0xCF9071d193E73d3eFcFcA8a9ca4bF72d97545925","0x0368BdDfC65c95E7F6152987f88e5d017e3127Bf","0x53fEA31E7a0Be36D2A8d746eB55b67ea85678Ab2","0x60A2Cc5Fd6487E1BB826740aeD416FA4f93c7Ef1","0xA4b0aB8943ECE0B8cd6eE6Bd26366E9e02fC8987","0x8397dCe925c57bADb3fE48b9107f38C042D0EC34","0x9363210280909D31C138009688bE6566F0c1030b","0xb71e6a22884528F7eFE90388f8A3503716569D2A","0x17f0809f01e6aeb2F8f06Cc58c77Bfb9218e1F30","0xEF080024067C9b4A08DCeC24145A2F9f918d5570"];
 const ERC20_ABI=["function approve(address,uint256) returns (bool)","function allowance(address,address) view returns (uint256)","function balanceOf(address) view returns (uint256)"];
-const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function partialRepay(uint256,uint256,uint256,uint256,uint256)","function minPrincipal() view returns (uint128)","function activeLoanCount() view returns (uint256)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate,uint128 impairedLoss)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)",
+const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function partialRepay(uint256,uint256,uint256,uint256,uint256)","function rollover(uint256,uint256)","function addCollateral(uint256,uint256)","function minPrincipal() view returns (uint128)","function activeLoanCount() view returns (uint256)","function maxLoanLife() view returns (uint32)","function tierCount(address) view returns (uint256)","function tiers(address,uint256) view returns (uint16 ltvBps,uint32 duration,uint16 feeBps)","function tierDisabled(address,uint256) view returns (bool)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate,uint128 impairedLoss)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)",
   // custom errors, so ethers decodes a revert to a name instead of a raw selector
-  "error BadParam()","error NotSupported()","error BadTier()","error CapExceeded()","error Paused()","error Undercollateralized()","error OracleDown()","error TooManyActiveLoans()","error NotActive()","error Defaulted()","error Slippage()"];
+  // (includes the oracle's errors: they bubble up through book calls like rollover's LTV re-check)
+  "error BadParam()","error NotSupported()","error BadTier()","error CapExceeded()","error Paused()","error Undercollateralized()","error OracleDown()","error TooManyActiveLoans()","error NotActive()","error Defaulted()","error Slippage()","error Expired()","error NotBorrower()","error StalePrice()","error FeedNotSet()","error BadPrice()"];
+const ORACLE_ABI=["function usdValue18(address,uint256) view returns (uint256)"];
 const POOLW_ABI=["function deposit(uint256,address) returns (uint256)","function redeem(uint256,address,address) returns (uint256)","function balanceOf(address) view returns (uint256)","function convertToAssets(uint256) view returns (uint256)"];
 // ---- fast read layer: one Multicall3 call per refresh, with RPC failover + last-good cache ----
 const MC3="0xcA11bde05977b3631167028862bE2a173976CA11";
-const MC3_ABI=["function aggregate3((address target,bool allowFailure,bytes callData)[] calls) view returns ((bool success,bytes returnData)[] returnData)"];
+const MC3_ABI=["function aggregate3((address target,bool allowFailure,bytes callData)[] calls) view returns ((bool success,bytes returnData)[] returnData)","function getCurrentBlockTimestamp() view returns (uint256)"];
 const IFT=new ethers.Interface(FTSO_ABI);
+const IMC=new ethers.Interface(MC3_ABI);
+const IORC=new ethers.Interface(ORACLE_ABI);
 const IPOOL=new ethers.Interface([...POOL_ABI,...POOLW_ABI]);
 const IBOOK=new ethers.Interface([...BOOK_ABI,"function nextLoanId() view returns (uint256)"]);
 let _rp=null, _rpUrl=RPCS[0];
@@ -675,6 +687,9 @@ const COLL_HINT={
 };
 let COLL="FXRP", TIER=0;
 const $=id=>document.getElementById(id);
+// loan rows render twice (Borrow page + Portfolio) with the same ids; getElementById always hits the
+// first copy, so row-scoped lookups must prefer the copy inside the currently ACTIVE view
+const vEl=id=>document.querySelector('.view.active [id="'+id+'"]')||document.getElementById(id);
 const usd=n=>"$"+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const priceUsd=n=>"$"+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:n<1?6:4}); // asset prices need more precision
 const BAL={FXRP:0n,USDT0:0n};
@@ -766,8 +781,10 @@ async function loadChain(){
   // each collateral: feed price x staking rate x (1 - haircut), so preview matches the oracle valuation
   for(const k of Object.keys(MK)){ const m=MK[k]; const base=m.feed==="FLR"?flr:xrp; if(base) m.price=base*m.rate*(1-m.hc); }
   for(const k of Object.keys(MK)){const p=MK[k].price;if(!p)continue;for(const id of["px-"+k,"lpx-"+k]){const el=$(id);if(el)el.textContent=priceUsd(p);}}
-  // Re-price open loans' collateral in place (no innerHTML rebuild, keeps pay-down inputs intact)
-  for(const pl of PORT_LOANS){const el=$("lval-"+pl.id),p=MK[pl.sym]?.price;if(el&&p)el.textContent=usd(pl.amt*p);}
+  // Re-price open loans' collateral in place (no innerHTML rebuild, keeps pay-down inputs intact).
+  // querySelectorAll, not $: each loan row exists TWICE (Borrow page + Portfolio share the same ids),
+  // and getElementById only ever reaches the first copy, leaving the Portfolio numbers frozen.
+  for(const pl of PORT_LOANS){const p=MK[pl.sym]?.price;if(!p)continue;document.querySelectorAll('[id="lval-'+pl.id+'"]').forEach(el=>el.textContent=usd(pl.amt*p));}
   if(r[2]) STATS.tvl=Number(r[2][0])/1e6;
   if(r[3]) STATS.borrowed=Number(r[3][0])/1e6;
   if(r[4]) STATS.ts=Number(r[4][0]);
@@ -938,7 +955,7 @@ const esc=s=>String(s).replace(/[<>&]/g,c=>c==="<"?"&lt;":c===">"?"&gt;":"&amp;"
 function friendlyErr(e){
   // decode a named custom error (the ABI carries the error fragments) into plain English
   const nm=e&&(e.revert&&e.revert.name||(e.info&&e.info.error&&e.info.error.data&&null));
-  if(nm){ const map={BadParam:"Amount is outside the allowed range — check the minimum loan size.",Paused:"Borrowing is paused right now.",CapExceeded:"This market has reached its cap.",Undercollateralized:"Not enough collateral for this amount.",NotSupported:"This collateral isn't live yet.",OracleDown:"Price feed is briefly unavailable, try again shortly.",TooManyActiveLoans:"The book is at capacity, try again shortly.",NotActive:"This loan is no longer active.",Defaulted:"This loan has already defaulted."}; if(map[nm]) return map[nm]; }
+  if(nm){ const map={BadParam:"Amount is outside the allowed range — check the minimum loan size.",Paused:"Borrowing is paused right now.",CapExceeded:"This market has reached its cap.",Undercollateralized:"Not enough collateral at current prices. Top up collateral, then try again.",NotSupported:"This collateral isn't live yet.",OracleDown:"Price feed is briefly unavailable, try again shortly.",TooManyActiveLoans:"The book is at capacity, try again shortly.",NotActive:"This loan is no longer active.",Defaulted:"This loan has already defaulted.",Expired:"Too late to extend: the deadline has passed, or this extension would go past the 90-day maximum loan life.",NotBorrower:"Only the loan's borrower can extend it.",BadTier:"That term isn't available for this collateral.",StalePrice:"Price feed is briefly unavailable, try again shortly.",FeedNotSet:"Price feed is briefly unavailable, try again shortly.",BadPrice:"Price feed is briefly unavailable, try again shortly."}; if(map[nm]) return map[nm]; }
   const m=(errMsg(e)||"").toLowerCase();
   if(m.includes("missing revert data")||m.includes("429")||m.includes("too many")||m.includes("failed to fetch")||m.includes("timeout")||m.includes("could not coalesce")||(e&&(e.code==="SERVER_ERROR"||e.code==="TIMEOUT"||e.code==="NETWORK_ERROR")))
     return "Testnet RPC was busy for a moment. Please try again in a few seconds. (If it keeps happening, switch your wallet's Coston2 RPC to https://coston2.enosys.global/ext/C/rpc)";
@@ -993,10 +1010,10 @@ window.doRepay=async(id,due)=>{
     toast("Repaid. Your collateral is back in your wallet.","ok"); refreshAll();
   }catch(e){ console.error(e); toast("Repay failed: "+friendlyErr(e),"err"); }
 };
-window.togglePartial=(id)=>{ const p=$("prp-"+id); if(!p) return; const open=p.style.display!=="none"; p.style.display=open?"none":"flex"; if(!open){ const i=$("pr-"+id); if(i) i.focus(); } };
+window.togglePartial=(id)=>{ const p=vEl("prp-"+id); if(!p) return; const open=p.style.display!=="none"; const x=vEl("exp-"+id); if(x) x.style.display="none"; p.style.display=open?"none":"flex"; if(!open){ const i=vEl("pr-"+id); if(i) i.focus(); } };
 window.doPartial=async(id,principalStr)=>{
   if(!account) return openWalletPicker();
-  const el=$("pr-"+id), v=parseFloat(el&&el.value);
+  const el=vEl("pr-"+id), v=parseFloat(el&&el.value);
   if(!(v>0)){ toast("Enter a USD₮0 amount to pay down.","err"); return; }
   const amt=u6(el.value), principal=BigInt(principalStr);
   if(amt>=principal){ toast("That covers the whole loan — use Repay to close it.","err"); return; }
@@ -1009,6 +1026,93 @@ window.doPartial=async(id,principalStr)=>{
     toast("Paying down…"); await (await sendTx(book,"partialRepay",BigInt(id),amt,0n,0n,0n)).wait();
     toast("Paid down. Your debt is lower and your collateral stays locked until you repay in full.","ok"); refreshAll();
   }catch(e){ console.error(e); toast("Pay-down failed: "+friendlyErr(e),"err"); }
+};
+// ---- Extend (rollover): pay another term's fee, keep the borrowed USD₮0, push the deadline out ----
+const fmtDate=ts=>new Date(ts*1000).toLocaleDateString('en-US',{month:"short",day:"numeric",year:"numeric"});
+window.toggleExtend=(id)=>{ const p=vEl("exp-"+id); if(!p) return; const open=p.style.display!=="none"; const pr=vEl("prp-"+id); if(pr) pr.style.display="none"; p.style.display=open?"none":"block"; if(!open) renderExtend(id); };
+window.renderExtend=async(id)=>{
+  const L=EXT[id], b=vEl("exb-"+id); if(!L||!b) return;
+  b.textContent="Loading terms…";
+  try{
+    // one multicall: tier count + 90d cap + the oracle's OWN valuation of this collateral (the exact
+    // number the contract's LTV re-check uses) + chain time + up to 4 tier defs + retired flags.
+    // tierDisabled only exists from v1.8 — on the v1.7 testnet book the probe fails and decodes to
+    // undefined, which we treat as "not retired" (allowFailure=true makes this forward-compatible).
+    const P=4, calls=[
+      {t:BOOK,i:IBOOK,f:"tierCount",a:[L.collateral]},
+      {t:BOOK,i:IBOOK,f:"maxLoanLife"},
+      {t:ORACLE,i:IORC,f:"usdValue18",a:[L.collateral,L.collAmount]},
+      {t:MC3,i:IMC,f:"getCurrentBlockTimestamp"},
+    ];
+    for(let i=0;i<P;i++) calls.push({t:BOOK,i:IBOOK,f:"tiers",a:[L.collateral,i]});
+    for(let i=0;i<P;i++) calls.push({t:BOOK,i:IBOOK,f:"tierDisabled",a:[L.collateral,i]});
+    const r=await mc(calls);
+    const n=r[0]?Number(r[0][0]):0;
+    const maxLife=r[1]?Number(r[1][0]):90*86400;
+    const collVal=r[2]?r[2][0]:null; // null = oracle briefly stale; the contract would revert too
+    const nowTs=r[3]?Number(r[3][0]):Math.floor(Date.now()/1000);
+    if(!n){ b.textContent="No terms found for this collateral."; return; }
+    if(nowTs>L.dueAt){ b.innerHTML="This loan is past its deadline and can no longer be extended. You can still repay in full during the 48-hour grace period to get your collateral back."; return; }
+    const pUsd18=BigInt(L.principal)*10n**12n; // principal 6dp -> usd18, exactly the contract's principalAsUsd18
+    const cdec=CDEC[L.sym]||6;
+    const lifeEnd=L.openedAt+maxLife;
+    let rowsH="", anyLtv=false, minTop=null;
+    for(let i=0;i<Math.min(n,P);i++){
+      const T=r[4+i]; if(!T) continue;
+      const ltv=BigInt(T[0]), dur=Number(T[1]), feeBps=BigInt(T[2]);
+      const retired=r[4+P+i]?r[4+P+i][0]===true:false;
+      const fee=BigInt(L.principal)*feeBps/10000n; // floor division, matches the contract's addFee
+      const newDue=nowTs+dur, days=Math.round(dur/86400);
+      const name=(MK[L.sym]&&MK[L.sym].tiers[i]&&MK[L.sym].tiers[i].n)||("Tier "+(i+1));
+      const meta=`<b style="color:var(--ink)">${name}</b> · +${days}d · fee ${usd(Number(fee)/1e6)} · new deadline ${fmtDate(newDue)}`;
+      let why=null;
+      if(retired) why="This term has been retired and can't be extended into.";
+      else if(newDue>lifeEnd) why=`Would pass the ${Math.round(maxLife/86400)}-day maximum loan life (this loan's hard limit is ${fmtDate(lifeEnd)}). Repay and open a fresh loan instead.`;
+      else if(collVal===null) why="Price feed is briefly unavailable, try again shortly.";
+      else if(collVal*ltv/10000n<pUsd18){ // exact contract check: floor(collValue18*ltv/1e4) < principalAsUsd18
+        anyLtv=true;
+        const needVal=(pUsd18*10000n+ltv-1n)/ltv-collVal;                 // usd18 still missing, ceil
+        const tokRaw=(needVal*L.collAmount+collVal-1n)/collVal;           // raw collateral units, ceil
+        const withMargin=tokRaw*101n/100n+1n;                             // +1% so a small price move can't fail the tx
+        const disp=Math.ceil(Number(withMargin)/10**cdec*100)/100;
+        if(minTop===null||disp<minTop) minTop=disp;
+        why=`Needs about ${disp.toLocaleString('en-US')} more ${L.sym} collateral at current prices to qualify. Top it up below, then extend.`;
+      }
+      if(!why) rowsH+=`<div class="exopt"><span>${meta}</span><button class="btn btn-red btn-sm" onclick="doExtend('${id}',${i},'${fee}',${newDue})">Extend</button></div>`;
+      else rowsH+=`<div class="exopt off"><span>${meta}<small>${why}</small></span></div>`;
+    }
+    let topH="";
+    if(anyLtv) topH=`<div class="exopt" style="border-style:dashed"><span>Add collateral to this loan. It stays locked with the rest and comes back when you repay.</span><div class="inp" style="max-width:170px;padding:6px 10px;margin:0"><input id="ext-${id}" type="number" min="0" value="${minTop||""}"/><span class="u">${L.sym}</span></div><button class="btn btn-ln btn-sm" onclick="doTopUp('${id}')">Add</button></div>`;
+    b.innerHTML=`<div>Extending pays another term's fee in USD₮0 from your wallet. The USD₮0 you borrowed stays yours and your collateral stays locked. The position must still meet the term's LTV at current prices.</div>${rowsH}${topH}`;
+  }catch(e){ console.error("extend",e); b.textContent="Couldn't load terms. "+friendlyErr(e); }
+};
+window.doExtend=async(id,tier,feeStr,newDue)=>{
+  if(!account) return openWalletPicker();
+  try{
+    const fee=BigInt(feeStr), tok=C(USDT0_ADDR,ERC20_ABI), book=C(BOOK,BOOK_ABI);
+    if(fee>0n){
+      if(await tok.balanceOf(account)<fee){ toast("You need "+usd(Number(fee)/1e6)+" USD₮0 in your wallet to pay the extension fee.","err"); return; }
+      if(await tok.allowance(account,POOL)<fee){ toast("Approve USD₮0…"); await (await tok.approve(POOL,fee)).wait(); }
+    }
+    toast("Extending…"); await (await sendTx(book,"rollover",BigInt(id),BigInt(tier))).wait();
+    toast("Deadline extended to "+fmtDate(newDue)+". Same loan, new clock.","ok"); refreshAll();
+  }catch(e){ console.error(e); toast("Extend failed: "+friendlyErr(e),"err"); }
+};
+window.doTopUp=async(id)=>{
+  if(!account) return openWalletPicker();
+  const L=EXT[id]; if(!L) return;
+  const el=vEl("ext-"+id), v=parseFloat(el&&el.value);
+  if(!(v>0)){ toast("Enter a collateral amount to add.","err"); return; }
+  let amt; try{ amt=ethers.parseUnits(el.value,CDEC[L.sym]||6); }catch(_){ toast("Enter a valid amount.","err"); return; }
+  if(amt<=0n){ toast("Enter a collateral amount to add.","err"); return; }
+  try{
+    const tok=C(L.collateral,ERC20_ABI), book=C(BOOK,BOOK_ABI);
+    if(await tok.balanceOf(account)<amt){ toast("Not enough "+L.sym+" in your wallet.","err"); return; }
+    if(await tok.allowance(account,BOOK)<amt){ toast("Approve "+L.sym+"…"); await (await tok.approve(BOOK,amt)).wait(); }
+    toast("Adding collateral…"); await (await sendTx(book,"addCollateral",BigInt(id),amt)).wait();
+    L.collAmount=L.collAmount+amt;
+    toast("Collateral added.","ok"); renderExtend(id); loadChain(); fetchBalances();
+  }catch(e){ console.error(e); toast("Top-up failed: "+friendlyErr(e),"err"); }
 };
 window.doWithdraw=async()=>{
   if(!account) return;
@@ -1028,10 +1132,12 @@ async function loadPositions(){
       const lr=await mc(calls);            // every loan in a single multicall
       lr.forEach((L,idx)=>{ if(!L) return; const id=idx+1;
         if(L.active && String(L.borrower).toLowerCase()===account.toLowerCase()){ const due=L.principal; loanCount++;
-          const sym=ADDR2MK[String(L.collateral).toLowerCase()]||"FXRP", amt=Number(L.collAmount)/1e6, lp=MK[sym]?.price||0;
+          const sym=ADDR2MK[String(L.collateral).toLowerCase()]||"FXRP", cdec=CDEC[sym]||6, amt=Number(L.collAmount)/10**cdec, lp=MK[sym]?.price||0;
           PORT_LOANS.push({id,sym,amt});
-          out+=`<div class="posrow"><div><b>${amt.toLocaleString('en-US')} ${sym}</b><small>worth <span id="lval-${id}">${lp?usd(amt*lp):"…"}</span> now · borrowed ${usd(Number(L.principal)/1e6)} · repay ${usd(Number(due)/1e6)} by ${new Date(Number(L.dueAt)*1000).toLocaleDateString('en-US',{month:"short",day:"numeric",year:"numeric"})}</small></div><div class="posr"><button class="btn btn-ln btn-sm" onclick="togglePartial('${id}')">Pay down</button><button class="btn btn-red btn-sm" onclick="doRepay('${id}','${due}')">Repay</button></div></div>`;
+          EXT[id]={principal:L.principal,dueAt:Number(L.dueAt),openedAt:Number(L.openedAt),collateral:String(L.collateral),collAmount:L.collAmount,sym};
+          out+=`<div class="posrow"><div><b>${amt.toLocaleString('en-US')} ${sym}</b><small>worth <span id="lval-${id}">${lp?usd(amt*lp):"…"}</span> now · borrowed ${usd(Number(L.principal)/1e6)} · repay ${usd(Number(due)/1e6)} by ${new Date(Number(L.dueAt)*1000).toLocaleDateString('en-US',{month:"short",day:"numeric",year:"numeric"})}</small></div><div class="posr"><button class="btn btn-ln btn-sm" onclick="toggleExtend('${id}')">Extend</button><button class="btn btn-ln btn-sm" onclick="togglePartial('${id}')">Pay down</button><button class="btn btn-red btn-sm" onclick="doRepay('${id}','${due}')">Repay</button></div></div>`;
           out+=`<div id="prp-${id}" style="display:none;gap:8px;align-items:center;justify-content:flex-end;padding:0 14px 12px"><span style="font-size:12px;color:var(--ink2)">Pay down part of the debt, collateral stays locked</span><div class="inp" style="max-width:170px;padding:6px 10px;margin:0"><input id="pr-${id}" type="number" min="0" placeholder="Amount"/><span class="u">USD₮0</span></div><button class="btn btn-red btn-sm" onclick="doPartial('${id}','${L.principal}')">Confirm</button></div>`;
+          out+=`<div id="exp-${id}" style="display:none;padding:0 14px 14px"><div id="exb-${id}" style="font-size:12.5px;color:var(--ink2)">Loading terms…</div></div>`;
         }
       });
     }
