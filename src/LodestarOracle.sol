@@ -32,7 +32,9 @@ contract LodestarOracle is Ownable2Step {
     ///      `setRateClamp` arms it, behavior is byte-identical to the unclamped original.
     struct RateAnchor {
         uint192 rate; // last accepted rate (1e18); 0 = clamp not armed
-        uint64 ts; // when the anchor was set
+        uint64 ts; // last poke/arm time (per-interval slope reference)
+        uint192 armedRate; // rate captured at arm time (fixed cumulative-envelope base)
+        uint64 armedAt; // arm time (fixed; NOT reset by poke) — bounds total drift since arm
     }
 
     IFtsoV2 public immutable ftso;
@@ -48,6 +50,18 @@ contract LodestarOracle is Ownable2Step {
     ///      neglect is only that genuinely-accrued LST yield beyond the cap values conservatively
     ///      low until a poke/re-arm (lender-safe direction).
     uint64 public constant MAX_CLAMP_WINDOW = 30 days;
+
+    /// @dev CUMULATIVE drift ceiling. `MAX_CLAMP_WINDOW` bounds a SINGLE read to `g×30d` above the
+    ///      current anchor, but `pokeRateAnchor` (permissionless) advances that anchor and resets the
+    ///      per-interval window each call — so without this, sustained provider compromise + frequent
+    ///      poking compounds the anchor up the slope with NO total ceiling (proven: 20 bps/day ->
+    ///      +19.7% at 90d, +107% at 365d, unbounded in time). This caps the anchor (and every read) to
+    ///      a LINEAR envelope measured from the FIXED arm epoch: `armedRate × (1 + g × min(now−armedAt,
+    ///      MAX_TOTAL_CLAMP_WINDOW))`. At the 20 bps/day launch slope the worst-ever over-valuation is
+    ///      thus `g×365d = +73%` (1.73×), safely below the tightest launch bad-debt threshold (50% LTV
+    ///      = 2×). Real LST yield (~7%/yr) has years of headroom under this; the owner re-baselines with
+    ///      `setRateClamp` (resetting the epoch) for indefinite legitimate tracking.
+    uint64 public constant MAX_TOTAL_CLAMP_WINDOW = 365 days;
 
     event FeedSet(address indexed token, bytes21 feedId, address rateProvider, uint64 maxStale, uint16 haircutBps);
     event RateClampSet(address indexed token, uint16 growthBpsPerDay, uint256 anchorRate);
@@ -109,15 +123,20 @@ contract LodestarOracle is Ownable2Step {
         // 0 and >uint192 are both provider malfunctions; a silent uint192 truncation would anchor
         // at a tiny value and clamp all valuations toward zero.
         if (rate == 0 || rate > type(uint192).max) revert BadPrice();
-        rateAnchors[token] = RateAnchor(uint192(rate), uint64(block.timestamp));
+        // Arm BOTH the poke-tracked anchor (rate/ts) and the FIXED cumulative envelope (armedRate/
+        // armedAt). Re-arming resets the epoch, giving legitimate yield a fresh full envelope.
+        rateAnchors[token] =
+            RateAnchor(uint192(rate), uint64(block.timestamp), uint192(rate), uint64(block.timestamp));
         rateGrowthBpsPerDay[token] = growthBpsPerDay;
         emit RateClampSet(token, growthBpsPerDay, rate);
     }
 
     /// @notice Ratchet an armed clamp's anchor to the CURRENT CLAMPED rate — UP-ONLY — and reset
-    ///         the allowance window (permissionless; a keeper calls this periodically). Because the
-    ///         new anchor is the clamped value, a spiked provider can only advance the anchor along
-    ///         the allowed slope, never jump it.
+    ///         the per-interval allowance window (permissionless; a keeper calls this periodically).
+    ///         Because the new anchor is the clamped value, a spiked provider can only advance the
+    ///         anchor along the allowed slope, never jump it — AND `_clampedRate` additionally caps
+    ///         it at the fixed cumulative envelope (`armedRate`/`armedAt`), so no amount of poking
+    ///         compounds the anchor past `armedRate × (1 + g × MAX_TOTAL_CLAMP_WINDOW)`.
     /// @dev UP-ONLY is deliberate: live valuation already follows any rate DECREASE on every read
     ///      (`min(raw, allowed)`), so lowering the anchor here would add zero conservatism — it
     ///      would only let a single transient/spoofed low print (one poke lands during a provider
@@ -131,22 +150,33 @@ contract LodestarOracle is Ownable2Step {
         if (a.rate == 0) revert BadParam(); // not armed
         uint256 raw = ILstRateProvider(f.rateProvider).underlyingPerShare();
         if (raw == 0) revert BadPrice();
+        // _clampedRate now caps at min(per-interval slope, fixed cumulative envelope), so `accepted`
+        // can never exceed the envelope no matter how often poked — this is what bounds total drift.
         uint256 accepted = _clampedRate(token, raw);
-        if (accepted < a.rate) accepted = a.rate; // up-only (see @dev); ts still refreshes = allowance resets
+        if (accepted < a.rate) accepted = a.rate; // up-only (see @dev); per-interval window resets
         if (accepted > type(uint192).max) revert BadPrice(); // mirror setRateClamp's truncation guard
-        rateAnchors[token] = RateAnchor(uint192(accepted), uint64(block.timestamp));
+        // Preserve the FIXED arm epoch (armedRate/armedAt) — poking must NOT reset it, or the
+        // cumulative ceiling would restart every call and the drift would compound unbounded again.
+        rateAnchors[token] = RateAnchor(uint192(accepted), uint64(block.timestamp), a.armedRate, a.armedAt);
         emit RateAnchorPoked(token, accepted);
     }
 
-    /// @dev min(raw, anchor + anchor * growth * min(elapsed, MAX_CLAMP_WINDOW)).
-    ///      Unarmed (anchor 0) passes raw through.
+    /// @dev min(raw, per-interval slope ceiling, fixed cumulative envelope). The per-interval ceiling
+    ///      (anchor + anchor·g·min(elapsedSincePoke, MAX_CLAMP_WINDOW)) bounds a single read; the
+    ///      cumulative envelope (armedRate + armedRate·g·min(elapsedSinceArm, MAX_TOTAL_CLAMP_WINDOW))
+    ///      bounds the TOTAL drift since arm so repeated pokes cannot compound past it. Unarmed passes
+    ///      raw through.
     function _clampedRate(address token, uint256 raw) internal view returns (uint256) {
         RateAnchor memory a = rateAnchors[token];
         if (a.rate == 0) return raw;
+        uint16 g = rateGrowthBpsPerDay[token];
         uint256 elapsed = block.timestamp - a.ts;
         if (elapsed > MAX_CLAMP_WINDOW) elapsed = MAX_CLAMP_WINDOW;
-        uint256 allowed =
-            uint256(a.rate) + (uint256(a.rate) * rateGrowthBpsPerDay[token] * elapsed) / (10_000 * 1 days);
+        uint256 allowed = uint256(a.rate) + (uint256(a.rate) * g * elapsed) / (10_000 * 1 days);
+        uint256 totalElapsed = block.timestamp - a.armedAt;
+        if (totalElapsed > MAX_TOTAL_CLAMP_WINDOW) totalElapsed = MAX_TOTAL_CLAMP_WINDOW;
+        uint256 cumCeil = uint256(a.armedRate) + (uint256(a.armedRate) * g * totalElapsed) / (10_000 * 1 days);
+        if (allowed > cumCeil) allowed = cumCeil; // total drift since arm can never exceed the envelope
         return raw > allowed ? allowed : raw;
     }
 

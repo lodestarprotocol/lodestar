@@ -64,12 +64,12 @@ contract MainnetWiringTest is Test {
 
         uint256 before = oracle.priceUsd18(SFLR);
         oracle.setRateClamp(SFLR, 20); // what DeployMainnet does
-        (uint192 anchor,) = oracle.rateAnchors(SFLR);
+        (uint192 anchor,,,) = oracle.rateAnchors(SFLR);
         assertEq(uint256(anchor), adapter.underlyingPerShare(), "anchor = live Sceptre rate");
         assertEq(oracle.priceUsd18(SFLR), before, "arming must not move the price");
 
         oracle.pokeRateAnchor(SFLR); // permissionless keeper duty works against the real provider
-        (uint192 anchor2,) = oracle.rateAnchors(SFLR);
+        (uint192 anchor2,,,) = oracle.rateAnchors(SFLR);
         assertEq(uint256(anchor2), uint256(anchor), "same-block poke is a no-op ratchet");
         emit log_named_uint("armed anchor (sFLR->FLR, 1e18)", uint256(anchor));
     }

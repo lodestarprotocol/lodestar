@@ -116,12 +116,12 @@ contract LodestarV18Hardening is Test {
         vm.warp(block.timestamp + 1 days);
         oracle.pokeRateAnchor(address(sflr));
         // the poke may only advance the anchor along the allowed slope: 1e18 * 1.002
-        (uint192 rate,) = oracle.rateAnchors(address(sflr));
+        (uint192 rate,,,) = oracle.rateAnchors(address(sflr));
         assertEq(uint256(rate), 1.002e18, "anchor ratchets at clamped value, never jumps");
         // UP-ONLY: a poke during a slashed print must NOT bake the low into the anchor…
         sflrRate.set(0.5e18);
         oracle.pokeRateAnchor(address(sflr));
-        (rate,) = oracle.rateAnchors(address(sflr));
+        (rate,,,) = oracle.rateAnchors(address(sflr));
         assertEq(uint256(rate), 1.002e18, "anchor holds through a down-print (up-only)");
         // …while live valuation still follows the low raw rate immediately (min(raw, allowed))
         ftso.set(FLR, 5_000_000, 8);
@@ -160,13 +160,13 @@ contract LodestarV18Hardening is Test {
         MockRate newProvider = new MockRate();
         newProvider.set(5e18); // legitimately different basis
         oracle.setFeed(address(sflr), FLR, address(newProvider), 1 hours, 0);
-        (uint192 rate,) = oracle.rateAnchors(address(sflr));
+        (uint192 rate,,,) = oracle.rateAnchors(address(sflr));
         assertEq(uint256(rate), 0, "anchor cleared on provider change");
         assertEq(oracle.priceUsd18(address(sflr)), (5e16 * 5e18) / 1e18, "new provider unclamped until re-arm");
         // same-provider setFeed (e.g. haircut tweak) must NOT disturb an armed clamp
         oracle.setRateClamp(address(sflr), 20);
         oracle.setFeed(address(sflr), FLR, address(newProvider), 1 hours, 100);
-        (rate,) = oracle.rateAnchors(address(sflr));
+        (rate,,,) = oracle.rateAnchors(address(sflr));
         assertEq(uint256(rate), 5e18, "same-provider re-set keeps the anchor");
     }
 
@@ -259,7 +259,7 @@ contract LodestarV18Hardening is Test {
         assertEq(sflr.balanceOf(borrower), 100_000e18, "full collateral back");
         // owner re-arms at the new real rate -> full valuation restored immediately
         oracle.setRateClamp(address(sflr), 20);
-        (uint192 rate,) = oracle.rateAnchors(address(sflr));
+        (uint192 rate,,,) = oracle.rateAnchors(address(sflr));
         assertEq(uint256(rate), 2e18, "re-arm re-bases the anchor");
     }
 
