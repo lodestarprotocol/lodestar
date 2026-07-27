@@ -431,8 +431,8 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
               <div class="prow mt" style="padding-top:0"><span class="l">Oracle price</span><span class="r" id="b-px">…</span></div>
               <div class="prow"><span class="l">Max LTV</span><span class="r" id="b-ltv">…</span></div>
               <div class="prow"><span class="l">Fee from</span><span class="r" id="b-fee">…</span></div>
-              <div class="prow"><span class="l">Grace period</span><span class="r">48h</span></div>
-              <div class="prow"><span class="l">Settlement floor</span><span class="r">100→85% FTSO over 24h</span></div>
+              <div class="prow"><span class="l">Grace period</span><span class="r" id="m-grace">48h</span></div>
+              <div class="prow"><span class="l">Settlement floor</span><span class="r" id="m-floor">100→85% FTSO over 24h</span></div>
             </div>
             <div class="sec-h" style="margin-top:18px"><h2>Your loans</h2></div>
             <div id="myloans"><div class="empty" style="padding:30px"><b>No open loans</b>Lock collateral above to borrow.</div></div>
@@ -463,7 +463,7 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
               <div class="lbl">Pool</div>
               <div class="prow mt" style="padding-top:0"><span class="l">Pool size</span><span class="r" id="l-tvl">…</span></div>
               <div class="prow"><span class="l">Utilization</span><span class="r" id="l-util">0%</span></div>
-              <div class="prow"><span class="l">Utilization ceiling</span><span class="r">80%</span></div>
+              <div class="prow"><span class="l">Utilization ceiling</span><span class="r" id="l-ceil">80%</span></div>
               <div class="prow"><span class="l">Share price</span><span class="r" id="l-sp">1.0000</span></div>
               <div class="prow"><span class="l">Lenders</span><span class="r" id="l-lenders">…</span></div>
               <div class="lbl" style="margin-top:18px">Collateral prices</div>
@@ -633,11 +633,11 @@ let EXT={};        // full loan data for the Extend panel, keyed by id (BigInts 
 const CDEC={FXRP:6,STXRP:6,SFLR:18};
 const FEED_XRP="0x015852502f55534400000000000000000000000000", FEED_FLR="0x01464c522f55534400000000000000000000000000";
 const FTSO_ABI=["function getFeedById(bytes21) view returns (uint256 value, int8 decimals, uint64 timestamp)"];
-const POOL_ABI=["function totalAssets() view returns (uint256)","function principalOut() view returns (uint256)","function totalSupply() view returns (uint256)","function balanceOf(address) view returns (uint256)"];
+const POOL_ABI=["function maxUtilizationBps() view returns (uint16)","function totalAssets() view returns (uint256)","function principalOut() view returns (uint256)","function totalSupply() view returns (uint256)","function balanceOf(address) view returns (uint256)"];
 // testnet seed lenders (fresh faucet wallets that supplied USD₮0); lender count = how many still hold shares
 const SEED_LP=["0xCF9071d193E73d3eFcFcA8a9ca4bF72d97545925","0x0368BdDfC65c95E7F6152987f88e5d017e3127Bf","0x53fEA31E7a0Be36D2A8d746eB55b67ea85678Ab2","0x60A2Cc5Fd6487E1BB826740aeD416FA4f93c7Ef1","0xA4b0aB8943ECE0B8cd6eE6Bd26366E9e02fC8987","0x8397dCe925c57bADb3fE48b9107f38C042D0EC34","0x9363210280909D31C138009688bE6566F0c1030b","0xb71e6a22884528F7eFE90388f8A3503716569D2A","0x17f0809f01e6aeb2F8f06Cc58c77Bfb9218e1F30","0xEF080024067C9b4A08DCeC24145A2F9f918d5570"];
 const ERC20_ABI=["function approve(address,uint256) returns (bool)","function allowance(address,address) view returns (uint256)","function balanceOf(address) view returns (uint256)"];
-const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function partialRepay(uint256,uint256,uint256,uint256,uint256)","function rollover(uint256,uint256)","function addCollateral(uint256,uint256)","function minPrincipal() view returns (uint128)","function feeReserveBps() view returns (uint16)","function activeLoanCount() view returns (uint256)","function maxLoanLife() view returns (uint32)","function tierCount(address) view returns (uint256)","function tiers(address,uint256) view returns (uint16 ltvBps,uint32 duration,uint16 feeBps)","function tierDisabled(address,uint256) view returns (bool)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate,uint128 impairedLoss)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)",
+const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function partialRepay(uint256,uint256,uint256,uint256,uint256)","function rollover(uint256,uint256)","function addCollateral(uint256,uint256)","function minPrincipal() view returns (uint128)","function feeReserveBps() view returns (uint16)","function gracePeriod() view returns (uint64)","function settleStartBps() view returns (uint16)","function settleFloorMinBps() view returns (uint16)","function settleDecayPeriod() view returns (uint32)","function paused() view returns (bool)","function activeLoanCount() view returns (uint256)","function maxLoanLife() view returns (uint32)","function tierCount(address) view returns (uint256)","function tiers(address,uint256) view returns (uint16 ltvBps,uint32 duration,uint16 feeBps)","function tierDisabled(address,uint256) view returns (bool)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate,uint128 impairedLoss)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)",
   // custom errors, so ethers decodes a revert to a name instead of a raw selector
   // (includes the oracle's errors: they bubble up through book calls like rollover's LTV re-check)
   "error BadParam()","error NotSupported()","error BadTier()","error CapExceeded()","error Paused()","error Undercollateralized()","error OracleDown()","error TooManyActiveLoans()","error NotActive()","error Defaulted()","error Slippage()","error Expired()","error NotBorrower()","error StalePrice()","error FeedNotSet()","error BadPrice()"];
@@ -776,6 +776,12 @@ async function loadChain(){
     {t:BOOK,i:IBOOK,f:"nextLoanId"},
     {t:BOOK,i:IBOOK,f:"minPrincipal"},
     {t:BOOK,i:IBOOK,f:"feeReserveBps"},
+    {t:BOOK,i:IBOOK,f:"gracePeriod"},
+    {t:BOOK,i:IBOOK,f:"settleStartBps"},
+    {t:BOOK,i:IBOOK,f:"settleFloorMinBps"},
+    {t:BOOK,i:IBOOK,f:"settleDecayPeriod"},
+    {t:BOOK,i:IBOOK,f:"paused"},
+    {t:POOL,i:IPOOL,f:"maxUtilizationBps"},
   ];
   // Ask the oracle for the price of every collateral that exists on this network. This is the
   // exact number the contracts use for LTV, so the preview can never disagree with the borrow.
@@ -829,6 +835,10 @@ async function loadChain(){
   const nextId=r[6]?Number(r[6][0]):1;
   if(r[7]) STATS.minPrincipal=Number(r[7][0])/1e6; // smallest borrowable loan, in USD₮0
   if(r[8]&&Number(r[8][0])<=10000) STATS.lenderShare=(10000-Number(r[8][0]))/10000; // live fee split
+  if(r[9]) setTx("m-grace",Math.round(Number(r[9][0])/3600)+"h");
+  if(r[10]&&r[11]&&r[12]) setTx("m-floor",(Number(r[10][0])/100)+"→"+(Number(r[11][0])/100)+"% FTSO over "+Math.round(Number(r[12][0])/3600)+"h");
+  if(r[13]){ STATS.paused=!!r[13][0]; }
+  if(r[14]) setTx("l-ceil",(Number(r[14][0])/100)+"%");
   // Lender count: the explorer index (true holder count) is authoritative once it resolves; only fall
   // back to the seed-list heuristic before that, so the number never flickers back down on a refresh.
   let lenders=0; for(let i=0;i<SEED_LP.length;i++){ const b=r[seedStart+i]; if(b&&b[0]>0n) lenders++; }
@@ -1026,6 +1036,8 @@ window.doBorrow=async()=>{
   if(!account) return openWalletPicker();
   const m=MK[COLL]; if(!m.live){ toast(m.name+" is coming soon on Coston2."); return; }
   const btn=$("borrowBtn"), amt=u6($("amt").value);
+  // paused blocks NEW borrows only; say so plainly instead of letting the tx revert
+  if(STATS.paused){ toast("New borrows are paused right now. Repay, extend and settlement stay open.","warn"); return; }
   if(amt<=0n){ toast("Enter a collateral amount."); return; }
   // pre-check the on-chain minimum so a too-small loan gives a clear message, not a raw revert
   {
