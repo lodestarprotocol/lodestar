@@ -386,10 +386,10 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
 
         <div class="sec-h"><h2>Where borrower fees go</h2><span>every fee works for lenders</span></div>
         <div class="card pad">
-          <div class="dist"><span class="a" style="width:80%"></span><span class="b" style="width:20%"></span></div>
+          <div class="dist"><span class="a" id="d-fee-bara" style="width:80%"></span><span class="b" id="d-fee-barb" style="width:20%"></span></div>
           <div class="legend">
-            <div class="li"><span class="sw" style="background:var(--red)"></span> Lender yield <b>80%</b> · <span class="mut" id="d-fee-lenders">$0</span></div>
-            <div class="li"><span class="sw" style="background:var(--ink)"></span> First-loss buffer <b>20%</b> · <span class="mut" id="d-fee-reserve">$0</span></div>
+            <div class="li"><span class="sw" style="background:var(--red)"></span> Lender yield <b id="d-fee-lpct">80%</b> · <span class="mut" id="d-fee-lenders">$0</span></div>
+            <div class="li"><span class="sw" style="background:var(--ink)"></span> First-loss buffer <b id="d-fee-rpct">20%</b> · <span class="mut" id="d-fee-reserve">$0</span></div>
           </div>
         </div>
 
@@ -637,7 +637,7 @@ const POOL_ABI=["function totalAssets() view returns (uint256)","function princi
 // testnet seed lenders (fresh faucet wallets that supplied USD₮0); lender count = how many still hold shares
 const SEED_LP=["0xCF9071d193E73d3eFcFcA8a9ca4bF72d97545925","0x0368BdDfC65c95E7F6152987f88e5d017e3127Bf","0x53fEA31E7a0Be36D2A8d746eB55b67ea85678Ab2","0x60A2Cc5Fd6487E1BB826740aeD416FA4f93c7Ef1","0xA4b0aB8943ECE0B8cd6eE6Bd26366E9e02fC8987","0x8397dCe925c57bADb3fE48b9107f38C042D0EC34","0x9363210280909D31C138009688bE6566F0c1030b","0xb71e6a22884528F7eFE90388f8A3503716569D2A","0x17f0809f01e6aeb2F8f06Cc58c77Bfb9218e1F30","0xEF080024067C9b4A08DCeC24145A2F9f918d5570"];
 const ERC20_ABI=["function approve(address,uint256) returns (bool)","function allowance(address,address) view returns (uint256)","function balanceOf(address) view returns (uint256)"];
-const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function partialRepay(uint256,uint256,uint256,uint256,uint256)","function rollover(uint256,uint256)","function addCollateral(uint256,uint256)","function minPrincipal() view returns (uint128)","function activeLoanCount() view returns (uint256)","function maxLoanLife() view returns (uint32)","function tierCount(address) view returns (uint256)","function tiers(address,uint256) view returns (uint16 ltvBps,uint32 duration,uint16 feeBps)","function tierDisabled(address,uint256) view returns (bool)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate,uint128 impairedLoss)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)",
+const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function partialRepay(uint256,uint256,uint256,uint256,uint256)","function rollover(uint256,uint256)","function addCollateral(uint256,uint256)","function minPrincipal() view returns (uint128)","function feeReserveBps() view returns (uint16)","function activeLoanCount() view returns (uint256)","function maxLoanLife() view returns (uint32)","function tierCount(address) view returns (uint256)","function tiers(address,uint256) view returns (uint16 ltvBps,uint32 duration,uint16 feeBps)","function tierDisabled(address,uint256) view returns (bool)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate,uint128 impairedLoss)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)",
   // custom errors, so ethers decodes a revert to a name instead of a raw selector
   // (includes the oracle's errors: they bubble up through book calls like rollover's LTV re-check)
   "error BadParam()","error NotSupported()","error BadTier()","error CapExceeded()","error Paused()","error Undercollateralized()","error OracleDown()","error TooManyActiveLoans()","error NotActive()","error Defaulted()","error Slippage()","error Expired()","error NotBorrower()","error StalePrice()","error FeedNotSet()","error BadPrice()"];
@@ -711,7 +711,7 @@ const VIEWS=["dashboard","borrow","lend","portfolio","why","economics","faq"];
 const TITLES={dashboard:["Dashboard","Protocol overview"],borrow:["Borrow","Borrow against your assets"],lend:["Lend","Supply USD₮0, earn fees"],portfolio:["Portfolio","Your positions"],why:["Why no-liquidation","The model, in three ideas"],economics:["Economics","What your deposit earns"],faq:["FAQ","Frequently asked questions"]};
 window.calcEcon=()=>{
   const dep=+$("e-dep-s").value, util=+$("e-util-s").value/100, fee=+$("e-fee-s").value/100, turn=+$("e-turn-s").value;
-  const LENDER_SHARE=0.8; // lenders' share of fees; the remainder funds the first-loss buffer
+  const LENDER_SHARE=STATS.lenderShare??0.8; // live fee split from the book; 0.8 only until it loads
   const lent=dep*util, earn=lent*fee*turn*LENDER_SHARE, apy=dep>0?(earn/dep*100):0;
   $("e-dep").textContent=usd(dep); $("e-util").textContent=Math.round(util*100)+"%"; $("e-fee").textContent=(fee*100).toFixed(1)+"%"; $("e-turn").innerHTML=turn+"&times; / yr";
   $("e-apy").textContent=apy.toFixed(1)+"%"; $("e-earn").textContent=usd(earn); $("e-lent").textContent=usd(lent);
@@ -775,6 +775,7 @@ async function loadChain(){
     {t:BOOK,i:IBOOK,f:"activeLoanCount"},
     {t:BOOK,i:IBOOK,f:"nextLoanId"},
     {t:BOOK,i:IBOOK,f:"minPrincipal"},
+    {t:BOOK,i:IBOOK,f:"feeReserveBps"},
   ];
   // Ask the oracle for the price of every collateral that exists on this network. This is the
   // exact number the contracts use for LTV, so the preview can never disagree with the borrow.
@@ -827,6 +828,7 @@ async function loadChain(){
   if(r[5]) setTx("d-loans",String(Number(r[5][0])));
   const nextId=r[6]?Number(r[6][0]):1;
   if(r[7]) STATS.minPrincipal=Number(r[7][0])/1e6; // smallest borrowable loan, in USD₮0
+  if(r[8]&&Number(r[8][0])<=10000) STATS.lenderShare=(10000-Number(r[8][0]))/10000; // live fee split
   // Lender count: the explorer index (true holder count) is authoritative once it resolves; only fall
   // back to the seed-list heuristic before that, so the number never flickers back down on a refresh.
   let lenders=0; for(let i=0;i<SEED_LP.length;i++){ const b=r[seedStart+i]; if(b&&b[0]>0n) lenders++; }
@@ -851,14 +853,18 @@ async function loadChain(){
       });
       setTx("d-borrowers",String(borrowers.size));
       setTx("d-fees",usd(fees));
-      setTx("d-fee-lenders",usd(fees*0.8)); setTx("d-fee-reserve",usd(fees*0.2));
+      const LS=STATS.lenderShare??0.8;
+      setTx("d-fee-lenders",usd(fees*LS)); setTx("d-fee-reserve",usd(fees*(1-LS)));
+      setTx("d-fee-lpct",Math.round(LS*100)+"%"); setTx("d-fee-rpct",Math.round((1-LS)*100)+"%");
+      const ba=$("d-fee-bara"), bb=$("d-fee-barb");
+      if(ba) ba.style.width=(LS*100).toFixed(1)+"%"; if(bb) bb.style.width=((1-LS)*100).toFixed(1)+"%";
       // Lender APY = utilisation x blended annualised borrower fee x lenders' 80% share.
       // Utilisation is live, so an idle pool honestly reads low rather than quoting a target.
       const tvlNow=STATS.tvl||0, borrowedNow=STATS.borrowed||0;
       const utilNow=tvlNow>0?borrowedNow/tvlNow:0;
       if(wPrin>0){
         const annualFee=wFee/wPrin;                     // e.g. 1.043 on the 7-day tier
-        const apyNow=utilNow*annualFee*0.8*100;
+        const apyNow=utilNow*annualFee*(STATS.lenderShare??0.8)*100;
         setTx("d-apy",apyNow.toFixed(1)+"%"); setTx("l-apy",apyNow.toFixed(1)+"%");
         setTx("d-apy-sub",(utilNow*100).toFixed(0)+"% utilization now");
         setTx("l-apy-src",(annualFee*100).toFixed(0)+"% annualized fees x "+(utilNow*100).toFixed(0)+"% utilization");
