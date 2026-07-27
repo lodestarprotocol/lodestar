@@ -641,7 +641,7 @@ const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","func
   // custom errors, so ethers decodes a revert to a name instead of a raw selector
   // (includes the oracle's errors: they bubble up through book calls like rollover's LTV re-check)
   "error BadParam()","error NotSupported()","error BadTier()","error CapExceeded()","error Paused()","error Undercollateralized()","error OracleDown()","error TooManyActiveLoans()","error NotActive()","error Defaulted()","error Slippage()","error Expired()","error NotBorrower()","error StalePrice()","error FeedNotSet()","error BadPrice()"];
-const ORACLE_ABI=["function usdValue18(address,uint256) view returns (uint256)"];
+const ORACLE_ABI=["function usdValue18(address,uint256) view returns (uint256)","function priceUsd18(address) view returns (uint256)"];
 const POOLW_ABI=["function deposit(uint256,address) returns (uint256)","function redeem(uint256,address,address) returns (uint256)","function balanceOf(address) view returns (uint256)","function convertToAssets(uint256) view returns (uint256)"];
 // ---- fast read layer: one Multicall3 call per refresh, with RPC failover + last-good cache ----
 const MC3="0xcA11bde05977b3631167028862bE2a173976CA11";
@@ -677,9 +677,9 @@ const STATS={}; // last-good numbers so a slow/failed refresh never blanks the U
 // mainnet build reads the exact rate on-chain via the oracle (the rate drifts up as staking accrues).
 // tiers MUST match DeployMainnet (append-only, permanent): FXRP 50/45, sFLR 45/40, stXRP 40/35.
 const MK={
-  FXRP:{img:"assets/fxrp.png",name:"FXRP",sub:"XRP · FAsset",price:0,live:true,feed:"XRP",rate:1,hc:0,tiers:[{n:"Standard",d:7,ltv:50,fee:2.0},{n:"Extended",d:30,ltv:45,fee:3.5}]},
-  STXRP:{img:"assets/stxrp.png",name:"stXRP",sub:"Firelight staked XRP",price:0,soon:true,feed:"XRP",rate:1.0001,hc:0.06,tiers:[{n:"Standard",d:7,ltv:40,fee:2.0},{n:"Extended",d:30,ltv:35,fee:3.5}]},
-  SFLR:{img:"assets/sflr.png",name:"sFLR",sub:"Sceptre staked FLR",price:0,soon:true,feed:"FLR",rate:1.8564,hc:0.03,tiers:[{n:"Standard",d:7,ltv:45,fee:2.0},{n:"Extended",d:30,ltv:40,fee:3.5}]},
+  FXRP:{img:"assets/fxrp.png",name:"FXRP",sub:"XRP · FAsset",price:0,live:true,addr:FXRP_ADDR,feed:"XRP",rate:1,hc:0,tiers:[{n:"Standard",d:7,ltv:50,fee:2.0},{n:"Extended",d:30,ltv:45,fee:3.5}]},
+  STXRP:{img:"assets/stxrp.png",name:"stXRP",sub:"Firelight staked XRP",price:0,soon:true,addr:"",feed:"XRP",rate:1.0001,hc:0.06,tiers:[{n:"Standard",d:7,ltv:40,fee:2.0},{n:"Extended",d:30,ltv:35,fee:3.5}]},
+  SFLR:{img:"assets/sflr.png",name:"sFLR",sub:"Sceptre staked FLR",price:0,soon:true,addr:"",feed:"FLR",rate:1.8564,hc:0.03,tiers:[{n:"Standard",d:7,ltv:45,fee:2.0},{n:"Extended",d:30,ltv:40,fee:3.5}]},
 };
 // Per-collateral hint under the picker. FXRP points at the Coston2 faucet; the LSTs point at the
 // issuer's OFFICIAL mint app (verified: Firelight URL from flare.network's launch post, Sceptre from
@@ -776,6 +776,16 @@ async function loadChain(){
     {t:BOOK,i:IBOOK,f:"nextLoanId"},
     {t:BOOK,i:IBOOK,f:"minPrincipal"},
   ];
+  // Ask the oracle for the price of every collateral that exists on this network. This is the
+  // exact number the contracts use for LTV, so the preview can never disagree with the borrow.
+  const pxKeys=Object.keys(MK).filter(k=>MK[k].addr);
+  const pxStart=base.length;
+  pxKeys.forEach(k=>base.push({t:ORACLE,i:IORC,f:"priceUsd18",a:[MK[k].addr]}));
+  // Tiers are read from the book rather than trusted from a local table: they are append-only
+  // on chain, and a stale local copy would quote an LTV or fee the contract will not honour.
+  const TIER_PROBE=6;
+  const tierStart=base.length;
+  pxKeys.forEach(k=>{ for(let i=0;i<TIER_PROBE;i++) base.push({t:BOOK,i:IBOOK,f:"tiers",a:[MK[k].addr,i]}); });
   const seedStart=base.length;
   SEED_LP.forEach(a=>base.push({t:POOL,i:IPOOL,f:"balanceOf",a:[a]}));
   let r;
@@ -783,7 +793,25 @@ async function loadChain(){
   const px=v=>v?Number(v[0])/10**Number(v[1]):0;
   const xrp=r[0]?px(r[0]):0, flr=r[1]?px(r[1]):0;
   // each collateral: feed price x staking rate x (1 - haircut), so preview matches the oracle valuation
-  for(const k of Object.keys(MK)){ const m=MK[k]; const base=m.feed==="FLR"?flr:xrp; if(base) m.price=base*m.rate*(1-m.hc); }
+  for(const k of Object.keys(MK)){ const m=MK[k]; const b=m.feed==="FLR"?flr:xrp; if(b) m.price=b*m.rate*(1-m.hc); }
+  // Oracle wins where available: rate providers accrue, so a hardcoded staking rate silently
+  // drifts. Falls back to the estimate above if the call fails (token not priced on this chain).
+  pxKeys.forEach((k,idx)=>{ const v=r[pxStart+idx]; if(v&&v[0]>0n) MK[k].price=Number(v[0])/1e18; });
+  // Adopt on-chain tiers where the read succeeded; keep the local table if it did not, so a
+  // flaky RPC can never blank the borrow form. Re-render only when something actually changed.
+  pxKeys.forEach((k,ki)=>{
+    const names=MK[k].tiers.map(t=>t.n), found=[];
+    for(let i=0;i<TIER_PROBE;i++){
+      const v=r[tierStart+ki*TIER_PROBE+i]; if(!v) break;
+      const ltv=Number(v[0])/100, dur=Number(v[1]), fee=Number(v[2])/100;
+      if(!(ltv>0&&dur>0)) break;
+      found.push({n:names[i]||("Tier "+(i+1)),d:Math.round(dur/86400),ltv,fee});
+    }
+    if(!found.length) return;
+    const before=JSON.stringify(MK[k].tiers);
+    MK[k].tiers=found;
+    if(JSON.stringify(found)!==before){ if(TIER>=found.length) TIER=0; if(k===COLL&&$("terms")) terms(); rows(); }
+  });
   for(const k of Object.keys(MK)){const p=MK[k].price;if(!p)continue;for(const id of["px-"+k,"lpx-"+k]){const el=$(id);if(el)el.textContent=priceUsd(p);}}
   // Re-price open loans' collateral in place (no innerHTML rebuild, keeps pay-down inputs intact).
   // querySelectorAll, not $: each loan row exists TWICE (Borrow page + Portfolio share the same ids),
