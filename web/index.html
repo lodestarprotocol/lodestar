@@ -381,7 +381,7 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
           <div class="stat"><div class="k">Lenders</div><div class="v t" id="d-lenders">…</div><div class="sub">USD₮0 suppliers</div></div>
           <div class="stat"><div class="k">Borrowers</div><div class="v t" id="d-borrowers">…</div><div class="sub">open positions</div></div>
           <div class="stat"><div class="k">Lifetime fees paid</div><div class="v" id="d-fees">…</div><div class="sub">one-time borrower fees</div></div>
-          <div class="stat"><div class="k">Est. lender APY</div><div class="v t" style="color:var(--red)">14–18%</div><div class="sub">from borrower fees</div></div>
+          <div class="stat"><div class="k">Est. lender APY</div><div class="v t" style="color:var(--red)" id="d-apy">…</div><div class="sub" id="d-apy-sub">at current utilization</div></div>
         </div>
 
         <div class="sec-h"><h2>Where borrower fees go</h2><span>every fee works for lenders</span></div>
@@ -449,8 +449,8 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
               <div class="fld"><label>Deposit amount <span class="bal">Balance <b id="balUSDT0">—</b><button class="maxbtn" onclick="fillAmt('lamt','USDT0',1)">MAX</button><button class="maxbtn" onclick="fillAmt('lamt','USDT0',0.5)">50%</button></span></label><div class="inp"><input id="lamt" type="number" value="10000" min="0"/><span class="u">USD₮0</span></div></div>
               <div class="fauc">No test USD₮0 yet? Claim it from the <a href="https://faucet.flare.network/coston2" target="_blank" rel="noopener">official Flare faucet ↗</a></div>
               <div class="preview" style="border-top:none;padding-top:4px">
-                <div class="prow hero"><span class="l">Estimated net APY</span><span class="r" style="color:var(--red)">14–18%</span></div>
-                <div class="prow"><span class="l">Source</span><span class="r">borrower fees</span></div>
+                <div class="prow hero"><span class="l">Estimated net APY</span><span class="r" style="color:var(--red)" id="l-apy">…</span></div>
+                <div class="prow"><span class="l">Source</span><span class="r" id="l-apy-src">borrower fees</span></div>
                 <div class="prow"><span class="l">You receive</span><span class="r" id="l-shares">0 lodUSD₮0</span></div>
                 <div class="badge"><b>Senior position.</b> Lenders are repaid first on any default.</div>
               </div>
@@ -810,14 +810,31 @@ async function loadChain(){
     let lr; try{ lr=await mc(lc); }catch(_){ lr=null; }
     if(lr){
       let fees=0; const borrowers=new Set(); const acts=[];
+      // Blended annualised fee rate, measured from the loans actually written rather than assumed:
+      // each loan contributes fee/principal scaled to a year by its own term, weighted by principal.
+      let wFee=0, wPrin=0;
       lr.forEach((L,idx)=>{ if(!L) return;
         fees+=Number(L.fee)/1e6;
         if(L.active) borrowers.add(String(L.borrower).toLowerCase());
+        const pr=Number(L.principal)/1e6, fe=Number(L.fee)/1e6;
+        const days=(Number(L.dueAt)-Number(L.openedAt))/86400;
+        if(pr>0&&fe>0&&days>=1){ wFee+=(fe/pr)*(365/days)*pr; wPrin+=pr; }
         acts.push({id:idx+1,b:String(L.borrower),coll:Number(L.collAmount)/1e6,pr:Number(L.principal)/1e6,t:Number(L.openedAt),active:L.active});
       });
       setTx("d-borrowers",String(borrowers.size));
       setTx("d-fees",usd(fees));
       setTx("d-fee-lenders",usd(fees*0.8)); setTx("d-fee-reserve",usd(fees*0.2));
+      // Lender APY = utilisation x blended annualised borrower fee x lenders' 80% share.
+      // Utilisation is live, so an idle pool honestly reads low rather than quoting a target.
+      const tvlNow=STATS.tvl||0, borrowedNow=STATS.borrowed||0;
+      const utilNow=tvlNow>0?borrowedNow/tvlNow:0;
+      if(wPrin>0){
+        const annualFee=wFee/wPrin;                     // e.g. 1.043 on the 7-day tier
+        const apyNow=utilNow*annualFee*0.8*100;
+        setTx("d-apy",apyNow.toFixed(1)+"%"); setTx("l-apy",apyNow.toFixed(1)+"%");
+        setTx("d-apy-sub",(utilNow*100).toFixed(0)+"% utilization now");
+        setTx("l-apy-src",(annualFee*100).toFixed(0)+"% annualized fees x "+(utilNow*100).toFixed(0)+"% utilization");
+      } else { setTx("d-apy","—"); setTx("l-apy","—"); setTx("d-apy-sub","no loans yet"); }
       renderActivity(acts);
     }
   }
