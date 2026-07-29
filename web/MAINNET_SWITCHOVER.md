@@ -74,7 +74,11 @@ also gate the preview so the button never promises something the contract will r
 Verified live on 2026-07-27 with negative controls. Anything added later that displays a
 protocol value should follow the same rule: read it, do not print a literal.
 
-- Prices via `LodestarOracle.priceUsd18` per collateral
+- Prices via `LodestarOracle.priceUsd18` per collateral (counted value); market price derived
+  from it using the on-chain haircut, NOT the local `hc` estimate
+- Haircut via `LodestarOracle.feeds(collateral)` `haircutBps` (owner-mutable; drives the
+  market-vs-counted split on tiles, borrow summary, and preview — verified 2026-07-29 with a
+  poisoned-local negative control)
 - Tiers (LTV, term, fee) via `tiers(collateral, i)`
 - Fee split via `feeReserveBps` (drives APY, distribution amounts, labels, bar widths)
 - `gracePeriod`, `settleStartBps`, `settleFloorMinBps`, `settleDecayPeriod`
