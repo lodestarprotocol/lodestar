@@ -638,7 +638,7 @@ const POOL_ABI=["function maxUtilizationBps() view returns (uint16)","function t
 // testnet seed lenders (fresh faucet wallets that supplied USD₮0); lender count = how many still hold shares
 const SEED_LP=["0xCF9071d193E73d3eFcFcA8a9ca4bF72d97545925","0x0368BdDfC65c95E7F6152987f88e5d017e3127Bf","0x53fEA31E7a0Be36D2A8d746eB55b67ea85678Ab2","0x60A2Cc5Fd6487E1BB826740aeD416FA4f93c7Ef1","0xA4b0aB8943ECE0B8cd6eE6Bd26366E9e02fC8987","0x8397dCe925c57bADb3fE48b9107f38C042D0EC34","0x9363210280909D31C138009688bE6566F0c1030b","0xb71e6a22884528F7eFE90388f8A3503716569D2A","0x17f0809f01e6aeb2F8f06Cc58c77Bfb9218e1F30","0xEF080024067C9b4A08DCeC24145A2F9f918d5570"];
 const ERC20_ABI=["function approve(address,uint256) returns (bool)","function allowance(address,address) view returns (uint256)","function balanceOf(address) view returns (uint256)"];
-const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function partialRepay(uint256,uint256,uint256,uint256,uint256)","function rollover(uint256,uint256)","function addCollateral(uint256,uint256)","function minPrincipal() view returns (uint128)","function feeReserveBps() view returns (uint16)","function gracePeriod() view returns (uint64)","function settleStartBps() view returns (uint16)","function settleFloorMinBps() view returns (uint16)","function settleDecayPeriod() view returns (uint32)","function paused() view returns (bool)","function activeLoanCount() view returns (uint256)","function maxLoanLife() view returns (uint32)","function tierCount(address) view returns (uint256)","function tiers(address,uint256) view returns (uint16 ltvBps,uint32 duration,uint16 feeBps)","function tierDisabled(address,uint256) view returns (bool)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate,uint128 impairedLoss)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)",
+const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function partialRepay(uint256,uint256,uint256,uint256,uint256)","function rollover(uint256,uint256)","function addCollateral(uint256,uint256)","function minPrincipal() view returns (uint128)","function feeReserveBps() view returns (uint16)","function gracePeriod() view returns (uint64)","function settleStartBps() view returns (uint16)","function settleFloorMinBps() view returns (uint16)","function settleDecayPeriod() view returns (uint32)","function paused() view returns (bool)","function activeLoanCount() view returns (uint256)","function activeLoanIds(uint256) view returns (uint256)","function maxLoanLife() view returns (uint32)","function tierCount(address) view returns (uint256)","function tiers(address,uint256) view returns (uint16 ltvBps,uint32 duration,uint16 feeBps)","function tierDisabled(address,uint256) view returns (bool)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate,uint128 impairedLoss)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)",
   // custom errors, so ethers decodes a revert to a name instead of a raw selector
   // (includes the oracle's errors: they bubble up through book calls like rollover's LTV re-check)
   "error BadParam()","error NotSupported()","error BadTier()","error CapExceeded()","error Paused()","error Undercollateralized()","error OracleDown()","error TooManyActiveLoans()","error NotActive()","error Defaulted()","error Slippage()","error Expired()","error NotBorrower()","error StalePrice()","error FeedNotSet()","error BadPrice()"];
@@ -672,6 +672,72 @@ async function mc(calls){
   }
 }
 const STATS={}; // last-good numbers so a slow/failed refresh never blanks the UI
+// ---- incremental loan scan: a closed loan is immutable on chain, so each id is read ONCE, folded
+// into a persistent cache, and never fetched again. Each refresh reads only the open loans plus ids
+// minted since the last scan. Without this the dashboard re-read every loan ever written (1,900+
+// during the quest campaign) in one giant multicall every 15s — the actual source of page lag.
+const LCKEY="lode_lc1_"+BOOK.slice(2,10).toLowerCase();
+let LC=null, LIVE={fees:0,wFee:0,wPrin:0,borrowers:new Set(),acts:[]}, _scanning=false;
+function lcLoad(){ if(LC) return LC;
+  try{ const x=JSON.parse(localStorage.getItem(LCKEY)||"null"); LC=(x&&x.book===BOOK)?x:null; }catch(_){ LC=null; }
+  if(!LC) LC={book:BOOK,upTo:0,fees:0,wFee:0,wPrin:0,acts:[],open:[]};
+  return LC; }
+function lcSave(){ try{ localStorage.setItem(LCKEY,JSON.stringify(LC)); }catch(_){} }
+async function scanLoans(nextId){
+  if(_scanning) return; _scanning=true;
+  try{
+    const c=lcLoad();
+    const ids=[...c.open]; for(let id=c.upTo+1;id<nextId;id++) ids.push(id);
+    if(!ids.length){ LIVE={fees:0,wFee:0,wPrin:0,borrowers:new Set(),acts:[]}; return; }
+    // Accumulate into locals and commit only after every chunk succeeds, so a mid-scan RPC failure
+    // can never fold the same closed loan into the cache twice.
+    const live={fees:0,wFee:0,wPrin:0,borrowers:new Set(),acts:[]};
+    const closed={fees:0,wFee:0,wPrin:0,acts:[]};
+    const open=[]; const CH=400;
+    for(let o=0;o<ids.length;o+=CH){
+      const slice=ids.slice(o,o+CH);
+      const lr=await mc(slice.map(id=>({t:BOOK,i:IBOOK,f:"loans",a:[id]})));
+      lr.forEach((L,i)=>{ const id=slice[i];
+        if(!L){ open.push(id); return; }           // unreadable this round: retry next refresh
+        const pr=Number(L.principal)/1e6, fe=Number(L.fee)/1e6, days=(Number(L.dueAt)-Number(L.openedAt))/86400;
+        const act={id,b:String(L.borrower),coll:Number(L.collAmount)/1e6,pr,t:Number(L.openedAt),active:!!L.active};
+        const dst=L.active?live:closed;
+        dst.fees+=fe;
+        if(pr>0&&fe>0&&days>=1){ dst.wFee+=(fe/pr)*(365/days)*pr; dst.wPrin+=pr; }
+        dst.acts.push(act);
+        if(L.active){ open.push(id); live.borrowers.add(String(L.borrower).toLowerCase()); }
+      });
+    }
+    c.fees+=closed.fees; c.wFee+=closed.wFee; c.wPrin+=closed.wPrin;
+    c.acts=c.acts.concat(closed.acts).sort((a,b)=>b.id-a.id).slice(0,40);
+    c.open=open; c.upTo=Math.max(c.upTo,nextId-1);
+    LIVE=live; lcSave();
+  } finally { _scanning=false; }
+}
+function renderLoanStats(){
+  const c=lcLoad();
+  const fees=c.fees+LIVE.fees;
+  setTx("d-borrowers",String(LIVE.borrowers.size));
+  setTx("d-fees",usd(fees));
+  const LS=STATS.lenderShare??0.8;
+  setTx("d-fee-lenders",usd(fees*LS)); setTx("d-fee-reserve",usd(fees*(1-LS)));
+  setTx("d-fee-lpct",Math.round(LS*100)+"%"); setTx("d-fee-rpct",Math.round((1-LS)*100)+"%");
+  const ba=$("d-fee-bara"), bb=$("d-fee-barb");
+  if(ba) ba.style.width=(LS*100).toFixed(1)+"%"; if(bb) bb.style.width=((1-LS)*100).toFixed(1)+"%";
+  // Lender APY = utilisation x blended annualised borrower fee x lenders' share; the fee rate is
+  // measured from loans actually written (closed cache + live), so an idle pool honestly reads low.
+  const wFee=c.wFee+LIVE.wFee, wPrin=c.wPrin+LIVE.wPrin;
+  const tvlNow=STATS.tvl||0, borrowedNow=STATS.borrowed||0;
+  const utilNow=tvlNow>0?borrowedNow/tvlNow:0;
+  if(wPrin>0){
+    const annualFee=wFee/wPrin;
+    const apyNow=utilNow*annualFee*LS*100;
+    setTx("d-apy",apyNow.toFixed(1)+"%"); setTx("l-apy",apyNow.toFixed(1)+"%");
+    setTx("d-apy-sub",(utilNow*100).toFixed(0)+"% utilization now");
+    setTx("l-apy-src",(annualFee*100).toFixed(0)+"% annualized fees x "+(utilNow*100).toFixed(0)+"% utilization");
+  } else { setTx("d-apy","—"); setTx("l-apy","—"); setTx("d-apy-sub","no loans yet"); }
+  renderActivity(LIVE.acts.concat(c.acts));
+}
 // price = FTSO feed x staking rate x (1 - haircut), matching LodestarOracle.priceUsd18 exactly.
 // FXRP: XRP feed, 1:1, no haircut. sFLR: FLR feed x Sceptre rate x 3% haircut. stXRP: XRP feed x
 // Firelight rate x 6% haircut. `rate` here is a reference value for the testnet "Soon" display; the
@@ -857,43 +923,10 @@ async function loadChain(){
   let lenders=0; for(let i=0;i<SEED_LP.length;i++){ const b=r[seedStart+i]; if(b&&b[0]>0n) lenders++; }
   if(STATS.lendersExact==null){ const lv=String(lenders||(tvl>0?1:0)); setTx("d-lenders",lv); setTx("l-lenders",lv); }
   preview();
-  // second batch: every loan → lifetime fees, unique active borrowers, recent activity feed
+  // second batch: lifetime fees, active borrowers, activity — via the incremental loan cache
+  // (only open loans + newly minted ids are fetched; closed history comes from localStorage).
   if(nextId>1){
-    const lc=[]; for(let id=1;id<nextId;id++) lc.push({t:BOOK,i:IBOOK,f:"loans",a:[id]});
-    let lr; try{ lr=await mc(lc); }catch(_){ lr=null; }
-    if(lr){
-      let fees=0; const borrowers=new Set(); const acts=[];
-      // Blended annualised fee rate, measured from the loans actually written rather than assumed:
-      // each loan contributes fee/principal scaled to a year by its own term, weighted by principal.
-      let wFee=0, wPrin=0;
-      lr.forEach((L,idx)=>{ if(!L) return;
-        fees+=Number(L.fee)/1e6;
-        if(L.active) borrowers.add(String(L.borrower).toLowerCase());
-        const pr=Number(L.principal)/1e6, fe=Number(L.fee)/1e6;
-        const days=(Number(L.dueAt)-Number(L.openedAt))/86400;
-        if(pr>0&&fe>0&&days>=1){ wFee+=(fe/pr)*(365/days)*pr; wPrin+=pr; }
-        acts.push({id:idx+1,b:String(L.borrower),coll:Number(L.collAmount)/1e6,pr:Number(L.principal)/1e6,t:Number(L.openedAt),active:L.active});
-      });
-      setTx("d-borrowers",String(borrowers.size));
-      setTx("d-fees",usd(fees));
-      const LS=STATS.lenderShare??0.8;
-      setTx("d-fee-lenders",usd(fees*LS)); setTx("d-fee-reserve",usd(fees*(1-LS)));
-      setTx("d-fee-lpct",Math.round(LS*100)+"%"); setTx("d-fee-rpct",Math.round((1-LS)*100)+"%");
-      const ba=$("d-fee-bara"), bb=$("d-fee-barb");
-      if(ba) ba.style.width=(LS*100).toFixed(1)+"%"; if(bb) bb.style.width=((1-LS)*100).toFixed(1)+"%";
-      // Lender APY = utilisation x blended annualised borrower fee x lenders' 80% share.
-      // Utilisation is live, so an idle pool honestly reads low rather than quoting a target.
-      const tvlNow=STATS.tvl||0, borrowedNow=STATS.borrowed||0;
-      const utilNow=tvlNow>0?borrowedNow/tvlNow:0;
-      if(wPrin>0){
-        const annualFee=wFee/wPrin;                     // e.g. 1.043 on the 7-day tier
-        const apyNow=utilNow*annualFee*(STATS.lenderShare??0.8)*100;
-        setTx("d-apy",apyNow.toFixed(1)+"%"); setTx("l-apy",apyNow.toFixed(1)+"%");
-        setTx("d-apy-sub",(utilNow*100).toFixed(0)+"% utilization now");
-        setTx("l-apy-src",(annualFee*100).toFixed(0)+"% annualized fees x "+(utilNow*100).toFixed(0)+"% utilization");
-      } else { setTx("d-apy","—"); setTx("l-apy","—"); setTx("d-apy-sub","no loans yet"); }
-      renderActivity(acts);
-    }
+    try{ await scanLoans(nextId); renderLoanStats(); }catch(e){ console.error("loanscan",e); }
   }
 }
 // True lender count = current holders of the lodUSDT0 share token. The public RPCs cap getLogs so
@@ -1210,14 +1243,17 @@ const emptyHTML=(t,s)=>`<div class="empty" style="padding:28px"><b>${t}</b>${s}<
 async function loadPositions(){
   if(!account) return;
   try{
-    // one batch: nextLoanId + this wallet's pool shares
-    const pre=await mc([{t:BOOK,i:IBOOK,f:"nextLoanId"},{t:POOL,i:IPOOL,f:"balanceOf",a:[account]}]);
-    const n=pre[0]?Number(pre[0][0]):1; const sh=pre[1]?pre[1][0]:0n;
+    // one batch: open-loan count + this wallet's pool shares. Only the ACTIVE loans are ever
+    // shown here, so read the on-chain activeLoanIds set (~dozens) instead of every loan ever
+    // written (1,900+ during the quest campaign — the old full scan was a page-lag source).
+    const pre=await mc([{t:BOOK,i:IBOOK,f:"activeLoanCount"},{t:POOL,i:IPOOL,f:"balanceOf",a:[account]}]);
+    const n=pre[0]?Number(pre[0][0]):0; const sh=pre[1]?pre[1][0]:0n;
     let out=""; let loanCount=0; PORT_LOANS=[];
-    if(n>1){
-      const calls=[]; for(let id=1;id<n;id++) calls.push({t:BOOK,i:IBOOK,f:"loans",a:[id]});
-      const lr=await mc(calls);            // every loan in a single multicall
-      lr.forEach((L,idx)=>{ if(!L) return; const id=idx+1;
+    if(n>0){
+      const idr=await mc(Array.from({length:n},(_,i)=>({t:BOOK,i:IBOOK,f:"activeLoanIds",a:[i]})));
+      const ids=idr.filter(Boolean).map(v=>Number(v[0]));
+      const lr=await mc(ids.map(id=>({t:BOOK,i:IBOOK,f:"loans",a:[id]})));
+      lr.forEach((L,idx)=>{ if(!L) return; const id=ids[idx];
         if(L.active && String(L.borrower).toLowerCase()===account.toLowerCase()){ const due=L.principal; loanCount++;
           const sym=ADDR2MK[String(L.collateral).toLowerCase()]||"FXRP", cdec=CDEC[sym]||6, amt=Number(L.collAmount)/10**cdec, lp=MK[sym]?.price||0;
           PORT_LOANS.push({id,sym,amt});
@@ -1250,7 +1286,10 @@ function init(){
   // overwriting it before the fresh fetch lands.
   try{ const c=localStorage.getItem("lode_lenders"); if(c){ STATS.lendersExact=parseInt(c,10); setTx("d-lenders",c); setTx("l-lenders",c); } }catch(_){}
   rows();terms();setColl("FXRP");calcEcon();route();loadChain();
-  setInterval(()=>{loadChain();if(account)fetchBalances();},15000);
+  // Overlap guard: if a refresh is still in flight (slow RPC), skip the tick instead of stacking
+  // a second giant request behind it — stacked refreshes were compounding the lag.
+  let _rf=false;
+  setInterval(async()=>{ if(_rf) return; _rf=true; try{ await loadChain(); if(account) fetchBalances(); }catch(_){ } finally{ _rf=false; } },15000);
   setTimeout(tryEager,600); // reconnect the last-used wallet after EIP-6963 providers announce
   maybeOnboard();
 }
