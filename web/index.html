@@ -614,8 +614,12 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
 
 <script>
 // ---- Coston2 testnet (chainId 114), live deployment ----
-// Enosys first — coston2-api.flare.network intermittently 429s and breaks wallet gas-estimation ("missing revert data").
-const RPCS=["https://coston2.enosys.global/ext/C/rpc","https://rpc.ankr.com/flare_coston2","https://coston2-api.flare.network/ext/C/rpc"];
+// All three go down or rate-limit at different times (coston2-api 429s in bursts; enosys was fully
+// unreachable for a whole day on 2026-07-31). The site itself does not depend on this order — it races
+// them at load (probeRpc) — but the order IS what a wallet gets from wallet_addEthereumChain, and the
+// first entry becomes that wallet's default endpoint until the user changes it by hand. So keep a
+// currently-reliable endpoint first and let addChain reorder by live probe.
+const RPCS=["https://coston2-api.flare.network/ext/C/rpc","https://rpc.ankr.com/flare_coston2","https://coston2.enosys.global/ext/C/rpc"];
 const RPC=RPCS[0];
 const CHAIN_HEX="0x72", CHAIN_NAME="Flare Testnet Coston2";
 const FTSO="0xC4e9c78EA53db782E28f28Fdf80BaF59336B304d";
@@ -777,7 +781,7 @@ const vEl=id=>document.querySelector('.view.active [id="'+id+'"]')||document.get
 const usd=n=>"$"+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const priceUsd=n=>"$"+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:n<1?6:4}); // asset prices need more precision
 const BAL={FXRP:0n,USDT0:0n};
-function toast(msg,type){const c=$("toasts");if(!c)return;const el=document.createElement("div");el.className="toast"+(type?" "+type:"");el.innerHTML=`<div>${msg}</div><span class="tclose" onclick="this.parentElement.remove()">✕</span>`;c.appendChild(el);setTimeout(()=>el.remove(),6500);}
+function toast(msg,type,ms){const c=$("toasts");if(!c)return;const el=document.createElement("div");el.className="toast"+(type?" "+type:"");el.innerHTML=`<div>${msg}</div><span class="tclose" onclick="this.parentElement.remove()">✕</span>`;c.appendChild(el);setTimeout(()=>el.remove(),ms||6500);}
 window.toggleMenu=()=>{document.querySelector(".sidebar").classList.toggle("open");$("scrim").classList.toggle("show");};
 // ---- dark mode toggle (top corner) ----
 const MOON_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
@@ -1017,13 +1021,32 @@ function disconnectWallet(){
   if($("pf-lend")) $("pf-lend").innerHTML=emptyHTML("Not connected","Connect a wallet to see your deposit.");
   if($("pf-sub")) $("pf-sub").textContent="connect a wallet to view";
 }
+// The wallet keeps whichever RPC it was handed when the network was first added, so hand it the one
+// that is answering right now rather than a static guess that may have died since.
+async function addChainRpcs(){ const live=await probeRpc(); return live ? [live,...RPCS.filter(u=>u!==live)] : RPCS.slice(); }
+// A wallet can sit on an endpoint that stopped answering while the chain itself is perfectly healthy.
+// Gas estimation then fails and the wallet blocks the tx behind a "this may fail" warning even though
+// the call succeeds on chain (seen live: a lender could not withdraw while their MetaMask still pointed
+// at an RPC that had gone down). Detect it once per connection and name the endpoint to switch to —
+// re-adding the chain cannot fix an entry the wallet already stores, only the user can.
+async function checkWalletRpc(eip){
+  const live=await probeRpc();
+  try{
+    await Promise.race([
+      eip.request({method:"eth_blockNumber"}),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),8000))
+    ]);
+  }catch(_){
+    toast("Your wallet's Coston2 RPC is not responding, so it may block transactions with a warning. The site is fine — it switched endpoints automatically. In your wallet's network settings, set the Coston2 RPC URL to <span class=\"mono\">"+esc(live||RPCS[0])+"</span>, then try again.","err",30000);
+  }
+}
 async function connectWith(eip, eager){
   try{
     const accts = await eip.request({method: eager?"eth_accounts":"eth_requestAccounts"});
     if(!accts || !accts.length){ if(!eager) toast("No account available in this wallet.","err"); return; }
     if(!eager){
       try{ await eip.request({method:"wallet_switchEthereumChain",params:[{chainId:CHAIN_HEX}]}); }
-      catch(e){ if(e.code===4902||(""+e).toLowerCase().includes("unrecognized")){ try{ await eip.request({method:"wallet_addEthereumChain",params:[{chainId:CHAIN_HEX,chainName:CHAIN_NAME,nativeCurrency:{name:"Coston2 Flare",symbol:"C2FLR",decimals:18},rpcUrls:RPCS,blockExplorerUrls:["https://coston2-explorer.flare.network"]}]}); }catch(_){}} }
+      catch(e){ if(e.code===4902||(""+e).toLowerCase().includes("unrecognized")){ try{ await eip.request({method:"wallet_addEthereumChain",params:[{chainId:CHAIN_HEX,chainName:CHAIN_NAME,nativeCurrency:{name:"Coston2 Flare",symbol:"C2FLR",decimals:18},rpcUrls:await addChainRpcs(),blockExplorerUrls:["https://coston2-explorer.flare.network"]}]}); }catch(_){}} }
     }
     currentEip=eip;
     bp=new ethers.BrowserProvider(eip); signer=await bp.getSigner(); account=await signer.getAddress();
@@ -1034,6 +1057,7 @@ async function connectWith(eip, eager){
       eip.on("chainChanged",async()=>{ bp=new ethers.BrowserProvider(eip); try{signer=await bp.getSigner();}catch(_){} refreshAll(); });
     }
     onConnected(eager);
+    checkWalletRpc(eip);
   }catch(e){ console.error(e); if(!eager) toast("Connection failed: "+(e.shortMessage||e.message||e),"err"); }
 }
 function onConnected(eager){
@@ -1083,13 +1107,28 @@ function friendlyErr(e){
   if(nm){ const map={BadParam:"Amount is outside the allowed range — check the minimum loan size.",Paused:"Borrowing is paused right now.",CapExceeded:"This market has reached its cap.",Undercollateralized:"Not enough collateral at current prices. Top up collateral, then try again.",NotSupported:"This collateral isn't live yet.",OracleDown:"Price feed is briefly unavailable, try again shortly.",TooManyActiveLoans:"The book is at capacity, try again shortly.",NotActive:"This loan is no longer active.",Defaulted:"This loan has already defaulted.",Expired:"Too late to extend: the deadline has passed, or this extension would go past the 90-day maximum loan life.",NotBorrower:"Only the loan's borrower can extend it.",BadTier:"That term isn't available for this collateral.",StalePrice:"Price feed is briefly unavailable, try again shortly.",FeedNotSet:"Price feed is briefly unavailable, try again shortly.",BadPrice:"Price feed is briefly unavailable, try again shortly."}; if(map[nm]) return map[nm]; }
   const m=(errMsg(e)||"").toLowerCase();
   if(m.includes("missing revert data")||m.includes("429")||m.includes("too many")||m.includes("failed to fetch")||m.includes("timeout")||m.includes("could not coalesce")||(e&&(e.code==="SERVER_ERROR"||e.code==="TIMEOUT"||e.code==="NETWORK_ERROR")))
-    return "Testnet RPC was busy for a moment. Please try again in a few seconds. (If it keeps happening, switch your wallet's Coston2 RPC to https://coston2.enosys.global/ext/C/rpc)";
+    // name the endpoint that is answering right now — a hardcoded one is wrong on the day it goes down
+    return "Testnet RPC was busy for a moment. Please try again in a few seconds. (If it keeps happening, switch your wallet's Coston2 RPC to <span class=\"mono\">"+esc(_rpUrl)+"</span>)";
   return esc(errMsg(e)); }
 // pool/book writes run an impairment sweep whose cost drifts between gas estimation and
 // inclusion (FTSO price moves add storage writes) — the node's exact estimate can leave the
 // tx a few hundred gas short and it dies at the end (seen live: ReentrancySentryOOG on withdraw).
 // Pad every state-changing call; if estimation itself reverts, send unpadded so the real error surfaces.
-async function sendTx(c,fn,...args){ const ov={}; try{ const g=await c[fn].estimateGas(...args); ov.gasLimit=g*140n/100n+50000n; }catch(_){} return c[fn](...args,ov); }
+// If the wallet's own endpoint cannot estimate (down or rate-limited) but the chain is fine, estimate
+// on the endpoint we probed live and send that padded limit, so a healthy tx is not blocked behind the
+// wallet's "may fail" warning. Only if BOTH fail do we send unpadded and let the real error surface.
+async function sendTx(c,fn,...args){
+  const ov={};
+  try{ const g=await c[fn].estimateGas(...args); ov.gasLimit=g*140n/100n+50000n; }
+  catch(_){
+    try{
+      const rc=new ethers.Contract(await c.getAddress(),c.interface,readProvider());
+      const g=await rc[fn].estimateGas(...args,{from:account});
+      ov.gasLimit=g*140n/100n+50000n;
+    }catch(_){}
+  }
+  return c[fn](...args,ov);
+}
 function busy(b,t){b.disabled=true;b.dataset.t=b.textContent;b.textContent=t;}
 function unbusy(b,t){b.disabled=false;b.textContent=t||b.dataset.t;}
 window.doBorrow=async()=>{
