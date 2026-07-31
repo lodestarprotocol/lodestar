@@ -653,7 +653,19 @@ const IORC=new ethers.Interface(ORACLE_ABI);
 const IPOOL=new ethers.Interface([...POOL_ABI,...POOLW_ABI]);
 const IBOOK=new ethers.Interface([...BOOK_ABI,"function nextLoanId() view returns (uint256)"]);
 let _rp=null, _rpUrl=RPCS[0];
-function readProvider(){ if(!_rp) _rp=new ethers.JsonRpcProvider(_rpUrl,undefined,{staticNetwork:true}); return _rp; }
+// A dead endpoint has to fail FAST. Ethers' default request timeout is minutes, so one unreachable
+// RPC stalls every read behind it before failover ever runs (a down primary cost first paint ~26s).
+function mkProv(url){ const rq=new ethers.FetchRequest(url); rq.timeout=6000; return new ethers.JsonRpcProvider(rq,undefined,{staticNetwork:true}); }
+function readProvider(){ if(!_rp) _rp=mkProv(_rpUrl); return _rp; }
+// Start on whichever endpoint actually answers rather than always on RPCS[0]: a preferred-but-down
+// primary otherwise charges every visitor a full timeout before the first number appears. Memoized,
+// so this costs one probe per page load.
+let _probed=null;
+function probeRpc(){ if(_probed) return _probed;
+  _probed=Promise.any(RPCS.map(async url=>{ const p=mkProv(url); await p.getBlockNumber(); return {p,url}; }))
+    .then(w=>{ _rp=w.p; _rpUrl=w.url; return w.url; })
+    .catch(()=>null); // all down: keep the default and let mc()'s failover surface the error
+  return _probed; }
 // batch `calls` [{t:target,i:iface,f:fn,a:args}] into one aggregate3; decode each (undefined on failure)
 async function mcOn(p, calls){
   const c=new ethers.Contract(MC3,MC3_ABI,p);
@@ -663,10 +675,11 @@ async function mcOn(p, calls){
 }
 // try current RPC, then fail over to the others (sticky: remember the one that worked)
 async function mc(calls){
+  await probeRpc();
   try{ return await mcOn(readProvider(),calls); }
   catch(e){
     for(const url of RPCS){ if(url===_rpUrl) continue;
-      try{ const p=new ethers.JsonRpcProvider(url,undefined,{staticNetwork:true}); const out=await mcOn(p,calls); _rp=p; _rpUrl=url; return out; }catch(_){}
+      try{ const p=mkProv(url); const out=await mcOn(p,calls); _rp=p; _rpUrl=url; return out; }catch(_){}
     }
     throw e;
   }
@@ -832,6 +845,7 @@ function setTx(id,v){const el=$(id);if(el)el.textContent=v;}
 function timeAgo(s){ if(!s)return""; const d=Math.max(0,Math.floor(Date.now()/1000)-s); if(d<60)return d+"s ago"; const m=Math.floor(d/60); if(m<60)return m+"m ago"; const h=Math.floor(m/60); if(h<24)return h+"h ago"; return Math.floor(h/24)+"d ago"; }
 // ONE multicall: prices + pool stats + loan count + every seed-LP balance. A second: every loan (fees/borrowers/activity).
 async function loadChain(){
+  await probeRpc(); // settle on a live endpoint before any read, incl. the block-number tile
   const p=readProvider();
   p.getBlockNumber().then(b=>setTx("netblock","#"+b)).catch(()=>{});
   fetchLenderCount(); // fire in parallel with the multicall so the true holder count lands ASAP
