@@ -642,7 +642,7 @@ const POOL_ABI=["function maxUtilizationBps() view returns (uint16)","function t
 // testnet seed lenders (fresh faucet wallets that supplied USD₮0); lender count = how many still hold shares
 const SEED_LP=["0xCF9071d193E73d3eFcFcA8a9ca4bF72d97545925","0x0368BdDfC65c95E7F6152987f88e5d017e3127Bf","0x53fEA31E7a0Be36D2A8d746eB55b67ea85678Ab2","0x60A2Cc5Fd6487E1BB826740aeD416FA4f93c7Ef1","0xA4b0aB8943ECE0B8cd6eE6Bd26366E9e02fC8987","0x8397dCe925c57bADb3fE48b9107f38C042D0EC34","0x9363210280909D31C138009688bE6566F0c1030b","0xb71e6a22884528F7eFE90388f8A3503716569D2A","0x17f0809f01e6aeb2F8f06Cc58c77Bfb9218e1F30","0xEF080024067C9b4A08DCeC24145A2F9f918d5570"];
 const ERC20_ABI=["function approve(address,uint256) returns (bool)","function allowance(address,address) view returns (uint256)","function balanceOf(address) view returns (uint256)"];
-const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function partialRepay(uint256,uint256,uint256,uint256,uint256)","function rollover(uint256,uint256)","function addCollateral(uint256,uint256)","function minPrincipal() view returns (uint128)","function feeReserveBps() view returns (uint16)","function gracePeriod() view returns (uint64)","function settleStartBps() view returns (uint16)","function settleFloorMinBps() view returns (uint16)","function settleDecayPeriod() view returns (uint32)","function paused() view returns (bool)","function activeLoanCount() view returns (uint256)","function activeLoanIds(uint256) view returns (uint256)","function maxLoanLife() view returns (uint32)","function tierCount(address) view returns (uint256)","function tiers(address,uint256) view returns (uint16 ltvBps,uint32 duration,uint16 feeBps)","function tierDisabled(address,uint256) view returns (bool)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate,uint128 impairedLoss)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)",
+const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function partialRepay(uint256,uint256,uint256,uint256,uint256)","function rollover(uint256,uint256)","function addCollateral(uint256,uint256)","function minPrincipal() view returns (uint128)","function feeReserveBps() view returns (uint16)","function gracePeriod() view returns (uint64)","function settleStartBps() view returns (uint16)","function settleFloorMinBps() view returns (uint16)","function settleDecayPeriod() view returns (uint32)","function paused() view returns (bool)","function activeLoanCount() view returns (uint256)","function maxActiveLoans() view returns (uint32)","function activeLoanIds(uint256) view returns (uint256)","function maxLoanLife() view returns (uint32)","function tierCount(address) view returns (uint256)","function tiers(address,uint256) view returns (uint16 ltvBps,uint32 duration,uint16 feeBps)","function tierDisabled(address,uint256) view returns (bool)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate,uint128 impairedLoss)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)",
   // custom errors, so ethers decodes a revert to a name instead of a raw selector
   // (includes the oracle's errors: they bubble up through book calls like rollover's LTV re-check)
   "error BadParam()","error NotSupported()","error BadTier()","error CapExceeded()","error Paused()","error Undercollateralized()","error OracleDown()","error TooManyActiveLoans()","error NotActive()","error Defaulted()","error Slippage()","error Expired()","error NotBorrower()","error StalePrice()","error FeedNotSet()","error BadPrice()"];
@@ -870,6 +870,9 @@ async function loadChain(){
     {t:BOOK,i:IBOOK,f:"settleDecayPeriod"},
     {t:BOOK,i:IBOOK,f:"paused"},
     {t:POOL,i:IPOOL,f:"maxUtilizationBps"},
+    // Appended last on purpose: everything above is read by fixed index r[0..14], and the pxStart
+    // offsets below are derived from base.length, so adding here shifts nothing.
+    {t:BOOK,i:IBOOK,f:"maxActiveLoans"},
   ];
   // Ask the oracle for the price of every collateral that exists on this network. This is the
   // exact number the contracts use for LTV, so the preview can never disagree with the borrow.
@@ -935,6 +938,10 @@ async function loadChain(){
   if(r[9]) setTx("m-grace",Math.round(Number(r[9][0])/3600)+"h");
   if(r[10]&&r[11]&&r[12]) setTx("m-floor",(Number(r[10][0])/100)+"→"+(Number(r[11][0])/100)+"% FTSO over "+Math.round(Number(r[12][0])/3600)+"h");
   if(r[13]){ STATS.paused=!!r[13][0]; }
+  // The book refuses a new loan once activeLoanIds hits maxActiveLoans. Repay, extend, settlement,
+  // supply and withdraw all keep working, so only the borrow button needs to know.
+  if(r[5]) STATS.activeLoans=Number(r[5][0]);
+  if(r[15]) STATS.maxActiveLoans=Number(r[15][0]);
   if(r[14]) setTx("l-ceil",(Number(r[14][0])/100)+"%");
   // Lender count: the explorer index (true holder count) is authoritative once it resolves; only fall
   // back to the seed-list heuristic before that, so the number never flickers back down on a refresh.
@@ -1137,6 +1144,13 @@ window.doBorrow=async()=>{
   const btn=$("borrowBtn"), amt=u6($("amt").value);
   // paused blocks NEW borrows only; say so plainly instead of letting the tx revert
   if(STATS.paused){ toast("New borrows are paused right now. Repay, extend and settlement stay open.","warn"); return; }
+  // Same treatment as paused: the book reverts with TooManyActiveLoans once it is full, and without
+  // this the user approves a transaction behind a "may fail" warning and pays gas to be told no.
+  // Only block on a value actually read from chain, so a failed refresh can never bar a valid borrow.
+  if(STATS.maxActiveLoans && STATS.activeLoans >= STATS.maxActiveLoans){
+    toast("The book is full ("+STATS.activeLoans+" of "+STATS.maxActiveLoans+" loans open), so no new loans can start right now. A slot frees up as soon as a loan is repaid or settled. Supplying, repaying and extending all still work.","warn",12000);
+    return;
+  }
   if(amt<=0n){ toast("Enter a collateral amount."); return; }
   // pre-check the on-chain minimum so a too-small loan gives a clear message, not a raw revert
   {

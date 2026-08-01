@@ -88,12 +88,14 @@ bind early and a user deserves a reason rather than a failed transaction.
   principal would cross the cap, the borrow reverts `CapExceeded`. Fetch both per market
   and show remaining capacity ("this market is at capacity" / "up to $X available now"),
   the same way `minPrincipal` is pre-checked today.
-- **`maxActiveLoans`** vs `activeLoanCount()`. When the slot array is full, any new borrow
-  reverts. `activeLoanCount` is already fetched; compare it and disable the form with an
-  explanation when it is at the cap.
+- ~~**`maxActiveLoans`** vs `activeLoanCount()`~~ **DONE 2026-08-02.** `maxActiveLoans` is
+  read with the other stats and `doBorrow` refuses with a plain-English reason before
+  touching the wallet. Verified on the live book at 396/400 with a forced-full negative
+  control. Only `open()` consumes a slot, so the message says supplying, repaying and
+  extending still work, which is accurate.
 
-Both belong next to the existing minimum-loan pre-check in `doBorrow`, and both should
-also gate the preview so the button never promises something the contract will refuse.
+`exposureCapUsd18` belongs next to it in `doBorrow`, and should also gate the preview so the
+button never promises something the contract will refuse.
 
 ## 7. Parameters already read from chain (do not re-hardcode)
 
