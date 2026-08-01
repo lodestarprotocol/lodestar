@@ -15,6 +15,25 @@ Verified against the file on 2026-07-27. Line numbers drift, so grep the strings
 - Two hardcoded `Not connected<small>Coston2 · chainId 114</small>` strings (sidebar
   markup and the disconnect handler).
 
+## 1b. The CSP in `web/_headers` (changing RPCS alone takes the dapp down)
+
+`_headers` pins `connect-src` to an explicit allowlist, and every host in it is a Coston2 one:
+
+```
+connect-src 'self' https://coston2-api.flare.network https://rpc.ankr.com
+            https://coston2.enosys.global https://coston2-explorer.flare.network wss:
+```
+
+Point `RPCS` at Flare mainnet without editing this and the browser blocks every RPC call
+before it leaves the page. The dapp does not error, it just never fills in: no TVL, no tiers,
+no prices, and `friendlyErr` never sees it because the request was refused client-side. The
+only trace is a CSP violation in the console, which is not where anyone looks first.
+
+Add each mainnet RPC host, plus the mainnet explorer, to `connect-src` in the SAME commit that
+changes `RPCS`. `https://rpc.ankr.com` is already host-wide so an ankr mainnet path survives;
+nothing else does. Verify after deploy by loading the site with the console open and confirming
+zero `Refused to connect` lines, not merely that the page rendered.
+
 ## 2. Contracts and tokens
 
 - `ORACLE`, `POOL`, `BOOK` → the mainnet deploy addresses (from the DeployMainnet broadcast).
