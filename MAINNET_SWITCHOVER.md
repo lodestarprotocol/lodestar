@@ -5,6 +5,13 @@ Everything here is testnet-specific and will silently misbehave if left as is.
 
 Verified against the file on 2026-07-27. Line numbers drift, so grep the strings.
 
+> **`web/` is the Cloudflare Pages output directory. Every file in it is served publicly at
+> lodestarprotocol.xyz, including anything that is not linked from the page.** This checklist and the
+> dapp test scripts both used to live there and were reachable to anyone who guessed the path. Notes
+> belong at the repo root next to `LAUNCH_RUNBOOK.md`, tooling in `tools/`. Before launch, run
+> `git ls-files web/` and confirm you would be comfortable with a stranger reading every line of every
+> file listed.
+
 ## 1. Network
 
 - `RPCS` — Coston2 endpoints. Replace with Flare mainnet RPCs. Keep at least three,
