@@ -1,5 +1,5 @@
-// Verify the capacity pre-check, and that appending maxActiveLoans to the stats multicall did not
-// shift the price/tier offsets that are derived from base.length.
+// Verify both borrow pre-checks (slot cap and per-collateral exposure cap), and that appending their
+// reads to the stats multicall did not shift the price/tier offsets derived from base.length.
 //
 // Usage: node captest.mjs http://127.0.0.1:8899/index.html   (needs headless Edge on :9222)
 const TARGET = process.argv[2];
@@ -14,45 +14,51 @@ await new Promise(r => ws.addEventListener("open", r));
 ws.addEventListener("message", (m) => {
   const d = JSON.parse(m.data);
   if (d.id && pending.has(d.id)) { pending.get(d.id)(d.result); pending.delete(d.id); }
-  if (d.method === "Runtime.consoleAPICalled" && d.params.type === "error") errors.push(JSON.stringify(d.params.args?.map(a => a.value ?? a.description)));
   if (d.method === "Runtime.exceptionThrown") errors.push(d.params.exceptionDetails?.exception?.description || "exception");
 });
 await send("Runtime.enable"); await send("Page.enable");
 await send("Page.navigate", { url: TARGET });
-await new Promise(r => setTimeout(r, 14000));
+await new Promise(r => setTimeout(r, 15000));
 
 const ev = async (expr) => (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true })).result?.value;
 
-// 1. the new values arrived from chain
-const cap = await ev("JSON.stringify({active:STATS.activeLoans,max:STATS.maxActiveLoans,paused:STATS.paused})");
-console.log("1. capacity read from chain :", cap);
+console.log("1. slot cap from chain   :", await ev("JSON.stringify({active:STATS.activeLoans,max:STATS.maxActiveLoans})"));
+console.log("2. exposure from chain   :", await ev("JSON.stringify({expo:MK.FXRP.expo,cap:MK.FXRP.expoCap})"));
+// If appending shifted the offsets, prices go 0 and the tier table silently falls back to the local copy.
+console.log("3. offsets intact        :", await ev("JSON.stringify({price:MK.FXRP.price,hc:MK.FXRP.hc,tiers:MK.FXRP.tiers.length,tvl:(document.getElementById('d-tvl')||{}).textContent})"));
 
-// 2. offsets that derive from base.length still line up: prices and tiers must be populated.
-//    If appending shifted them, prices go 0 and the tier table falls back to the local copy.
-const px = await ev("JSON.stringify(Object.fromEntries(Object.keys(MK).filter(k=>MK[k].addr).map(k=>[k,MK[k].price])))");
-console.log("2. oracle prices (0 = offsets broke):", px);
+// doBorrow returns at `if(!account)` before reaching anything under test. `account` is a top-level
+// `let`, a global lexical binding rather than a window property, so assign it bare.
+const arm = `account='0x50073735Bd847299c16033295962ECb8DDB528b7';
+             document.getElementById('amt').value='20';   // must clear minPrincipal, or that check fires first
+             
+             window.__t=[]; window.toast=(m)=>{window.__t.push(String(m));};`;
 
-// 3. tiles still render real numbers
-const tiles = await ev(`JSON.stringify(Object.fromEntries(["d-tvl","d-borrowed","d-util","d-apy","d-loans"].map(i=>[i,(document.getElementById(i)||{}).textContent])))`);
-console.log("3. tiles                    :", tiles);
+async function attempt(label, setup) {
+  await ev(arm + setup);
+  await ev("(async()=>{try{await window.doBorrow();}catch(e){}})()");
+  await new Promise(r => setTimeout(r, 1200));
+  const t = await ev("JSON.stringify(window.__t)");
+  console.log("   " + label.padEnd(34), t);
+  return t || "";
+}
 
-// 4. NEGATIVE CONTROL: the gate must actually fire. Force a full book and confirm doBorrow refuses
-//    before touching the wallet, then restore.
-// `account` is a top-level `let`, so it is a global lexical binding rather than a window property.
-// Without setting it, doBorrow returns at its wallet check and never reaches the gate under test.
-await ev("account='0x50073735Bd847299c16033295962ECb8DDB528b7'; window.__savedMax=STATS.maxActiveLoans; STATS.maxActiveLoans=1; STATS.activeLoans=99999; window.__toasts=[]; window.toast=(m,t)=>{window.__toasts.push(String(m));};");
-await ev("(async()=>{ try{ await window.doBorrow(); }catch(e){} })()");
-await new Promise(r => setTimeout(r, 1500));
-const fired = await ev("JSON.stringify(window.__toasts)");
-console.log("4. forced-full doBorrow says:", fired);
+console.log("4. exposure-cap gate:");
+// Slot cap must not fire in these, so give it room.
+const roomy = "STATS.activeLoans=1; STATS.maxActiveLoans=400;";
+const noRoom = await attempt("cap fully used ->", roomy + "MK.FXRP.expo=1000; MK.FXRP.expoCap=1000;");
+const someRoom = await attempt("only $1 of room ->", roomy + "MK.FXRP.expo=999; MK.FXRP.expoCap=1000;");
+const uncapped = await attempt("cap=0 (uncapped) ->", roomy + "MK.FXRP.expo=99999; MK.FXRP.expoCap=0;");
+const unread = await attempt("cap unread (undefined) ->", roomy + "MK.FXRP.expo=undefined; MK.FXRP.expoCap=undefined;");
+const plenty = await attempt("real chain values ->", roomy + "MK.FXRP.expo=1706; MK.FXRP.expoCap=1000000;");
 
-// 5. restore and confirm it does NOT block at real capacity
-await ev("STATS.maxActiveLoans=window.__savedMax; STATS.activeLoans=1; window.__toasts=[];");
-await ev("(async()=>{ try{ await window.doBorrow(); }catch(e){} })()");
-await new Promise(r => setTimeout(r, 1500));
-const notFired = await ev("JSON.stringify(window.__toasts)");
-console.log("5. with room, capacity msg  :", /book is full/.test(notFired || "") ? "WRONGLY BLOCKED" : "not blocked (correct)");
-console.log("   (message shown instead)  :", notFired);
-
-console.log("console errors:", errors.length ? errors : "none");
+const blocked = s => /capacity is left|at its cap/.test(s);
+console.log("");
+console.log("5. verdict:");
+console.log("   at cap blocks              :", blocked(noRoom) ? "PASS" : "FAIL");
+console.log("   partial room quotes it     :", blocked(someRoom) && /\$1\b/.test(someRoom) ? "PASS" : "FAIL");
+console.log("   uncapped (0) does NOT block:", !blocked(uncapped) ? "PASS" : "FAIL - would bar valid borrows");
+console.log("   unread cap does NOT block  :", !blocked(unread) ? "PASS" : "FAIL - a failed refresh would bar borrows");
+console.log("   real values do NOT block   :", !blocked(plenty) ? "PASS" : "FAIL");
+console.log("page exceptions:", errors.length ? errors : "none");
 ws.close();

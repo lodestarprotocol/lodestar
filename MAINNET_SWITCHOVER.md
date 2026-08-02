@@ -84,18 +84,20 @@ Two owner-set limits make `open()` revert with no friendly message. Neither bind
 testnet, but the guarded launch sets a $25k cap per collateral, so on mainnet they will
 bind early and a user deserves a reason rather than a failed transaction.
 
-- **`exposureCapUsd18(collateral)`** vs `exposureUsd18(collateral)`. When the requested
-  principal would cross the cap, the borrow reverts `CapExceeded`. Fetch both per market
-  and show remaining capacity ("this market is at capacity" / "up to $X available now"),
-  the same way `minPrincipal` is pre-checked today.
+- ~~**`exposureCapUsd18(collateral)`** vs `exposureUsd18(collateral)`~~ **DONE 2026-08-02.**
+  Both are read per market with the other stats and `doBorrow` quotes the room left before
+  the wallet is touched. A cap of `0` is uncapped on chain and a cap that failed to read is
+  not a reason to refuse, so it only acts on a real number. This one matters most at launch:
+  a $25k cap against a $100 `minPrincipal` binds at ~250 loans, well before the 400 slots.
 - ~~**`maxActiveLoans`** vs `activeLoanCount()`~~ **DONE 2026-08-02.** `maxActiveLoans` is
   read with the other stats and `doBorrow` refuses with a plain-English reason before
   touching the wallet. Verified on the live book at 396/400 with a forced-full negative
   control. Only `open()` consumes a slot, so the message says supplying, repaying and
   extending still work, which is accurate.
 
-`exposureCapUsd18` belongs next to it in `doBorrow`, and should also gate the preview so the
-button never promises something the contract will refuse.
+Both now sit next to the existing minimum-loan pre-check in `doBorrow`. Neither gates the
+preview yet, so the summary can still quote a loan the contract would refuse; the button
+stops it, which is the part that costs gas.
 
 ## 7. Parameters already read from chain (do not re-hardcode)
 

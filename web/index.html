@@ -642,7 +642,7 @@ const POOL_ABI=["function maxUtilizationBps() view returns (uint16)","function t
 // testnet seed lenders (fresh faucet wallets that supplied USD₮0); lender count = how many still hold shares
 const SEED_LP=["0xCF9071d193E73d3eFcFcA8a9ca4bF72d97545925","0x0368BdDfC65c95E7F6152987f88e5d017e3127Bf","0x53fEA31E7a0Be36D2A8d746eB55b67ea85678Ab2","0x60A2Cc5Fd6487E1BB826740aeD416FA4f93c7Ef1","0xA4b0aB8943ECE0B8cd6eE6Bd26366E9e02fC8987","0x8397dCe925c57bADb3fE48b9107f38C042D0EC34","0x9363210280909D31C138009688bE6566F0c1030b","0xb71e6a22884528F7eFE90388f8A3503716569D2A","0x17f0809f01e6aeb2F8f06Cc58c77Bfb9218e1F30","0xEF080024067C9b4A08DCeC24145A2F9f918d5570"];
 const ERC20_ABI=["function approve(address,uint256) returns (bool)","function allowance(address,address) view returns (uint256)","function balanceOf(address) view returns (uint256)"];
-const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function partialRepay(uint256,uint256,uint256,uint256,uint256)","function rollover(uint256,uint256)","function addCollateral(uint256,uint256)","function minPrincipal() view returns (uint128)","function feeReserveBps() view returns (uint16)","function gracePeriod() view returns (uint64)","function settleStartBps() view returns (uint16)","function settleFloorMinBps() view returns (uint16)","function settleDecayPeriod() view returns (uint32)","function paused() view returns (bool)","function activeLoanCount() view returns (uint256)","function maxActiveLoans() view returns (uint32)","function activeLoanIds(uint256) view returns (uint256)","function maxLoanLife() view returns (uint32)","function tierCount(address) view returns (uint256)","function tiers(address,uint256) view returns (uint16 ltvBps,uint32 duration,uint16 feeBps)","function tierDisabled(address,uint256) view returns (bool)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate,uint128 impairedLoss)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)",
+const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function partialRepay(uint256,uint256,uint256,uint256,uint256)","function rollover(uint256,uint256)","function addCollateral(uint256,uint256)","function minPrincipal() view returns (uint128)","function feeReserveBps() view returns (uint16)","function gracePeriod() view returns (uint64)","function settleStartBps() view returns (uint16)","function settleFloorMinBps() view returns (uint16)","function settleDecayPeriod() view returns (uint32)","function paused() view returns (bool)","function activeLoanCount() view returns (uint256)","function maxActiveLoans() view returns (uint32)","function exposureUsd18(address) view returns (uint256)","function exposureCapUsd18(address) view returns (uint256)","function activeLoanIds(uint256) view returns (uint256)","function maxLoanLife() view returns (uint32)","function tierCount(address) view returns (uint256)","function tiers(address,uint256) view returns (uint16 ltvBps,uint32 duration,uint16 feeBps)","function tierDisabled(address,uint256) view returns (bool)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate,uint128 impairedLoss)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)",
   // custom errors, so ethers decodes a revert to a name instead of a raw selector
   // (includes the oracle's errors: they bubble up through book calls like rollover's LTV re-check)
   "error BadParam()","error NotSupported()","error BadTier()","error CapExceeded()","error Paused()","error Undercollateralized()","error OracleDown()","error TooManyActiveLoans()","error NotActive()","error Defaulted()","error Slippage()","error Expired()","error NotBorrower()","error StalePrice()","error FeedNotSet()","error BadPrice()"];
@@ -890,6 +890,13 @@ async function loadChain(){
   pxKeys.forEach(k=>{ for(let i=0;i<TIER_PROBE;i++) base.push({t:BOOK,i:IBOOK,f:"tiers",a:[MK[k].addr,i]}); });
   const seedStart=base.length;
   SEED_LP.forEach(a=>base.push({t:POOL,i:IPOOL,f:"balanceOf",a:[a]}));
+  // Per-collateral borrow cap. The book reverts CapExceeded when exposure + this principal would
+  // cross it, and the guarded mainnet launch sets it small enough to bind before the slot cap does.
+  // Appended last so every offset above keeps its position.
+  const expoStart=base.length;
+  pxKeys.forEach(k=>base.push({t:BOOK,i:IBOOK,f:"exposureUsd18",a:[MK[k].addr]}));
+  const capStart=base.length;
+  pxKeys.forEach(k=>base.push({t:BOOK,i:IBOOK,f:"exposureCapUsd18",a:[MK[k].addr]}));
   let r;
   try{ r=await mc(base); }catch(e){ setTx("netblock","offline"); console.error("chain",e); return; }
   const px=v=>v?Number(v[0])/10**Number(v[1]):0;
@@ -901,6 +908,13 @@ async function loadChain(){
   // Adopt the on-chain haircut first (feeds() tuple: [feedId, rateProvider, decimals, maxStale,
   // haircutBps, set]) so the market-price derivation below can never use a stale local value.
   pxKeys.forEach((k,idx)=>{ const v=r[hcStart+idx]; if(v&&v[5]) MK[k].hc=Number(v[4])/10000; });
+  // Cap of 0 means uncapped on chain, so keep it as 0 and let the borrow pre-check treat it that way
+  // rather than reading a missing value as "no room left".
+  pxKeys.forEach((k,idx)=>{
+    const e=r[expoStart+idx], c=r[capStart+idx];
+    if(e) MK[k].expo=Number(e[0])/1e18;
+    if(c) MK[k].expoCap=Number(c[0])/1e18;
+  });
   // Oracle wins where available: rate providers accrue, so a hardcoded staking rate silently
   // drifts. Falls back to the estimate above if the call fails (token not priced on this chain).
   pxKeys.forEach((k,idx)=>{ const v=r[pxStart+idx]; if(v&&v[0]>0n){ MK[k].price=Number(v[0])/1e18; MK[k].mktPrice=MK[k].price/(1-MK[k].hc); } });
@@ -1158,6 +1172,19 @@ window.doBorrow=async()=>{
     if(m.price>0 && pr>0 && pr<minP){
       const minColl=Math.ceil((minP/(m.price*t.ltv/100))*100)/100;
       toast(`That borrow would be ${usd(pr)}, under the ${usd(minP)} minimum. Lock at least ${minColl.toLocaleString('en-US')} ${m.name}.`,"err"); return;
+    }
+    // Per-collateral borrow cap. The book reverts CapExceeded when exposure + principal crosses it.
+    // A cap of 0 is uncapped, and a cap we failed to read is not a reason to refuse a valid borrow,
+    // so only act on a real number. Quote the room left rather than just saying no.
+    if(m.expoCap>0 && m.expo>=0 && pr>0){
+      const room=m.expoCap-m.expo;
+      if(pr>room){
+        toast(room<=0
+          ? `${m.name} borrowing is at its cap of ${usd(m.expoCap)} for now. The cap frees up as existing loans are repaid or settled, and it is raised as the market proves itself.`
+          : `That borrow would be ${usd(pr)}, but only ${usd(room)} of ${m.name} borrowing capacity is left against the ${usd(m.expoCap)} cap. Borrow ${usd(room)} or less, or come back once loans are repaid.`,
+          "err",12000);
+        return;
+      }
     }
   }
   try{
