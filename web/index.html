@@ -513,6 +513,13 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
           <div class="prow"><span class="l">3 · Repay by the deadline</span><span class="r" style="font-family:Inter;font-weight:500;color:var(--ink2)">Get your collateral back, plus any yield it earned</span></div>
           <div class="prow"><span class="l">If you miss it</span><span class="r" style="font-family:Inter;font-weight:500;color:var(--ink2)">After a 48h grace, anyone can settle at a fair floor price; lenders first, surplus to you</span></div>
         </div>
+        <div class="card pad" style="margin-top:16px">
+          <div class="lbl">What protects a lender, in order</div>
+          <div class="prow mt" style="padding-top:2px"><span class="l">1 · The collateral</span><span class="r" style="font-family:Inter;font-weight:500;color:var(--ink2)">Every loan is overcollateralised at open. This is the real protection, not the buffer.</span></div>
+          <div class="prow"><span class="l">2 · First-loss buffer</span><span class="r" style="font-family:Inter;font-weight:500;color:var(--ink2)">Fee-funded, and sized to absorb settlement shortfalls and rounding, not a market crash.</span></div>
+          <div class="prow"><span class="l">3 · The lender pool</span><span class="r" style="font-family:Inter;font-weight:500;color:var(--ink2)">Senior. Repaid before the buffer, the penalty or the borrower's surplus.</span></div>
+          <p id="riskBreak" style="margin-top:14px;color:var(--ink2);line-height:1.65;font-size:14px">Loading the break-even from chain…</p>
+        </div>
       </section>
 
       <!-- ===================== ECONOMICS ===================== -->
@@ -578,7 +585,7 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
           </details>
           <details>
             <summary>What protects lenders?</summary>
-            <div class="a">Five layers. First claim on settlement proceeds: principal is paid before anything else. Conservative sizing: collateral is worth about twice the debt at open, terms are capped at 90 days, and a loan can only be extended while it still meets its LTV at current prices. Concentration limits: each collateral asset has its own exposure cap. A real first-loss buffer: 20% of every fee plus all default penalties accumulate on-chain and automatically cover lender shortfalls before anyone else is paid. And honest accounting: the moment a loan defaults, its expected loss is marked into the pool price, so no lender can quietly exit ahead of bad news. Even in an extreme crash, settlement never stalls and never fills below its floor: the buyout path needs no DEX at all, so a settler can pay stable and take the collateral in-kind while arbitrageurs hedge it anywhere. The residual risk, stated honestly: lenders only take a loss if the collateral falls more than roughly half within a single term <b>and</b> the borrower abandons the position, and that loss is bounded, priced by the fees, and never hidden. The contracts are covered by unit, adversarial, fuzz-invariant and live-Flare fork tests, and a three-part adversarial review found no path to steal lender funds.</div>
+            <div class="a">Five layers. First claim on settlement proceeds: principal is paid before anything else. Conservative sizing: collateral is worth about twice the debt at open, terms are capped at 90 days, and a loan can only be extended while it still meets its LTV at current prices. Concentration limits: each collateral asset has its own exposure cap. A real first-loss buffer: 20% of every fee plus all default penalties accumulate on-chain and automatically cover lender shortfalls before anyone else is paid. And honest accounting: the moment a loan defaults, its expected loss is marked into the pool price, so no lender can quietly exit ahead of bad news. Even in an extreme crash, settlement never stalls and never fills below its floor: the buyout path needs no DEX at all, so a settler can pay stable and take the collateral in-kind while arbitrageurs hedge it anywhere. The residual risk, stated honestly: lenders only take a loss if the collateral falls past the break-even shown on the <a href="#why">Why no-liquidation</a> page within a single term <b>and</b> the borrower abandons the position, and that loss is bounded, priced by the fees, and never hidden. The contracts are covered by unit, adversarial, fuzz-invariant and live-Flare fork tests, and a three-part adversarial review found no path to steal lender funds.</div>
           </details>
           <details>
             <summary>Where do prices come from?</summary>
@@ -951,6 +958,8 @@ async function loadChain(){
   if(r[8]&&Number(r[8][0])<=10000) STATS.lenderShare=(10000-Number(r[8][0]))/10000; // live fee split
   if(r[9]) setTx("m-grace",Math.round(Number(r[9][0])/3600)+"h");
   if(r[10]&&r[11]&&r[12]) setTx("m-floor",(Number(r[10][0])/100)+"→"+(Number(r[11][0])/100)+"% FTSO over "+Math.round(Number(r[12][0])/3600)+"h");
+  if(r[11]) STATS.settleFloorMinBps=Number(r[11][0]);
+  renderProtection();
   if(r[13]){ STATS.paused=!!r[13][0]; }
   // The book refuses a new loan once activeLoanIds hits maxActiveLoans. Repay, extend, settlement,
   // supply and withdraw all keep working, so only the borrow button needs to know.
@@ -1122,6 +1131,33 @@ const errMsg=e=>e.shortMessage||e.reason||(e.info&&e.info.error&&e.info.error.me
 // are all hardcoded trusted contracts, but a node/wallet diagnostic string should never render as HTML)
 const esc=s=>String(s).replace(/[<>&]/g,c=>c==="<"?"&lt;":c===">"?"&gt;":"&amp;");
 // map transient testnet-RPC failures (429 / no revert data) to a clear, actionable message
+// How far collateral can fall before a lender is actually impaired. Worst case per market:
+// borrow at the highest tier LTV, then settle at the lowest the floor ever decays to, so
+//   lenders whole while  floorMin * V_settle >= ltv * V_open   =>   drop = 1 - ltv/floorMin.
+// Both inputs are read from chain (tiers, settleFloorMinBps) so this can never drift from the
+// contracts the way a written-in number would. The FAQ used to say "roughly half", which was
+// wrong in the unsafe direction: at 50% LTV against an 85% floor the real figure is ~41%.
+function breakEvenDrop(mk){
+  const floor = (STATS.settleFloorMinBps||0)/10000;
+  const ltvs = (mk.tiers||[]).map(t=>t.ltv/100).filter(v=>v>0);
+  if(!floor || !ltvs.length) return null;
+  const ltv = Math.max(...ltvs);          // most aggressive tier = worst case
+  const d = 1 - ltv/floor;
+  return d>0 && d<1 ? d : null;
+}
+function renderProtection(){
+  const el=$("riskBreak"); if(!el) return;
+  const live=Object.keys(MK).filter(k=>MK[k].live && breakEvenDrop(MK[k])!=null);
+  if(!live.length) return;
+  const parts=live.map(k=>{
+    const m=MK[k], d=breakEvenDrop(m), ltv=Math.max(...m.tiers.map(t=>t.ltv));
+    return `<b style="color:var(--ink)">${esc(m.name)} would have to fall ${(d*100).toFixed(0)}%</b> (borrowed at its ${ltv}% tier)`;
+  });
+  const floorPct=(STATS.settleFloorMinBps/100).toFixed(0);
+  el.innerHTML = parts.join(", and ") + ` inside a single term, <b style="color:var(--ink)">and</b> the borrower would have to walk away, before a lender loses anything. `
+    + `That is the whole credit risk, and it follows from two numbers you can check on chain: the tier LTV, and a settlement floor that never decays below ${floorPct}% of the FTSO price. `
+    + `Both are read live from the contracts on this page, not written in by hand.`;
+}
 function friendlyErr(e){
   // decode a named custom error (the ABI carries the error fragments) into plain English
   const nm=e&&(e.revert&&e.revert.name||(e.info&&e.info.error&&e.info.error.data&&null));
