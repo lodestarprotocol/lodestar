@@ -259,6 +259,19 @@ contract StressHandler is Test {
     }
 
     // free-form move within sane bounds
+    /// Anyone can subordinate capital ahead of lenders. Exercised here so the buffer invariants
+    /// (book stable == reserveBalance, floor <= buffer) are fuzzed WITH external contributions in
+    /// the mix, not just with fee income.
+    function fundReserveBuffer(uint256 amt, uint256 actorSeed) public {
+        amt = bound(amt, 1, 50_000e6);
+        address a = _actor(actorSeed);
+        stable.mint(a, amt);
+        vm.startPrank(a);
+        stable.approve(address(book), amt);
+        try book.fundReserve(amt) {} catch {}
+        vm.stopPrank();
+    }
+
     function movePrice(uint256 p) public {
         ftso.set(XRP, bound(p, 1e7, 1e11), 8);
     }
@@ -342,6 +355,14 @@ contract LodestarStress is StdInvariant, Test {
     }
 
     // -------------------------------------------------- existing 6 (re-checked under stress)
+
+
+    /// Contributed first-loss can be consumed by losses but can never exceed the buffer holding it,
+    /// and can never be withdrawn out from under lenders. If this breaks, `withdrawReserve`'s guard
+    /// is arithmetically meaningless.
+    function invariant_reserveFloorNeverExceedsBuffer() public view {
+        assertLe(book.reserveFloor(), book.reserveBalance(), "floor exceeds the buffer it lives in");
+    }
 
     function invariant_principalOutMatchesLoans() public view {
         uint256 sum;

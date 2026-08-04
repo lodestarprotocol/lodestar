@@ -183,6 +183,19 @@ contract Handler is Test {
         vm.stopPrank();
     }
 
+    /// Anyone can subordinate capital ahead of lenders. Exercised here so the buffer invariants
+    /// (book stable == reserveBalance, floor <= buffer) are fuzzed WITH external contributions in
+    /// the mix, not just with fee income.
+    function fundReserveBuffer(uint256 amt, uint256 actorSeed) public {
+        amt = bound(amt, 1, 50_000e6);
+        address a = _actor(actorSeed);
+        stable.mint(a, amt);
+        vm.startPrank(a);
+        stable.approve(address(book), amt);
+        try book.fundReserve(amt) {} catch {}
+        vm.stopPrank();
+    }
+
     function movePrice(uint256 p) public {
         ftso.set(XRP, bound(p, 1e7, 1e11), 8); // XRP $0.10 .. $1000
     }
@@ -266,6 +279,13 @@ contract LodestarInvariant is StdInvariant, Test {
             (,,, uint256 principal,,,,, bool active,,) = book.loans(h.ids(i));
             if (active) assertGe(principal, book.minPrincipal(), "dust-principal active loan");
         }
+    }
+
+    /// Contributed first-loss can be consumed by losses but can never exceed the buffer holding it,
+    /// and can never be withdrawn out from under lenders. If this breaks, `withdrawReserve`'s guard
+    /// is arithmetically meaningless.
+    function invariant_reserveFloorNeverExceedsBuffer() public view {
+        assertLe(book.reserveFloor(), book.reserveBalance(), "floor exceeds the buffer it lives in");
     }
 
     /// The stable balance the book holds is exactly its first-loss buffer.

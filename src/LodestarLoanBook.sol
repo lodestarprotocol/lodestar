@@ -139,6 +139,12 @@ contract LodestarLoanBook is Ownable2Step, ReentrancyGuard {
     mapping(uint256 => uint16) public openLtvBps; // LTV the loan was underwritten at (its opening tier)
     uint256 public nextLoanId = 1;
     uint256 public reserveBalance; // stable held here as the first-loss buffer
+    /// @notice The part of `reserveBalance` that was contributed from outside the protocol and that
+    ///         the owner can never withdraw. Losses still consume it first (that is its whole job),
+    ///         and it is clamped down as they do, so `reserveFloor <= reserveBalance` always holds.
+    /// @dev Without this, every dollar of the buffer is owner-withdrawable down to the marked loss,
+    ///      so nobody outside the protocol could credibly subordinate capital ahead of lenders.
+    uint256 public reserveFloor;
 
     uint256[] public activeLoanIds; // every open loan, for the withdraw-time impairment sweep
     mapping(uint256 => uint256) private _activeIdx; // 1-based index into activeLoanIds; 0 = not active
@@ -170,6 +176,7 @@ contract LodestarLoanBook is Ownable2Step, ReentrancyGuard {
     );
     event ReserveCovered(uint256 indexed id, uint256 amount);
     event ReserveWithdrawn(address indexed to, uint256 amount);
+    event ReserveFunded(address indexed from, uint256 amount, uint256 newFloor);
     event TierAdded(address indexed collateral, uint16 ltvBps, uint32 duration, uint16 feeBps);
     event TierDisabledSet(address indexed collateral, uint256 indexed tierIndex, bool disabled);
     event RouterAllowed(address indexed router, bool allowed);
@@ -318,11 +325,35 @@ contract LodestarLoanBook is Ownable2Step, ReentrancyGuard {
         // cover. Refuse the withdrawal until every loan can be priced, rather than draining on a
         // stale-low earmark.
         if (!_syncAll()) revert OracleDown();
-        uint256 earmarked = pool.impairedLoss();
+        // Externally contributed first-loss (`reserveFloor`) is not the owner's to take: a contributor
+        // who could be withdrawn out of their position is not subordinated at all. Only buffer above
+        // both the marked loss and the contributed floor is genuine protocol surplus.
+        uint256 earmarked = pool.impairedLoss() + reserveFloor;
         if (reserveBalance < amount || reserveBalance - amount < earmarked) revert BadParam();
         reserveBalance -= amount;
         stable.safeTransfer(reserve, amount);
         emit ReserveWithdrawn(reserve, amount);
+    }
+
+    /// @notice Put capital in front of the lenders. Permissionless by design: the protocol, a
+    ///         partner or anyone else can thicken the first-loss buffer, and the amount contributed
+    ///         raises `reserveFloor` so the owner can never withdraw it back out. Losses still
+    ///         consume it ahead of lenders, which is the point of contributing it.
+    /// @dev    `nonReentrant` is REQUIRED, not defensive. `_swapViaRouter` measures settlement
+    ///         proceeds as a stable balance delta, so a router callback that funded the reserve
+    ///         inside that window would have the same stable counted twice, once as buffer and once
+    ///         as proceeds, and would break `stable.balanceOf(book) == reserveBalance`.
+    /// @dev    Credits the balance delta rather than `amount` so a fee-on-transfer stable can never
+    ///         credit more than actually arrived, matching how collateral is handled elsewhere.
+    function fundReserve(uint256 amount) external nonReentrant {
+        if (amount == 0) revert BadParam();
+        uint256 before_ = stable.balanceOf(address(this));
+        stable.safeTransferFrom(msg.sender, address(this), amount);
+        uint256 received = stable.balanceOf(address(this)) - before_;
+        if (received == 0) revert BadParam();
+        reserveBalance += received;
+        reserveFloor += received;
+        emit ReserveFunded(msg.sender, received, reserveFloor);
     }
 
     /// @notice Recover stable accidentally donated to the book (anything above the tracked
@@ -993,6 +1024,10 @@ contract LodestarLoanBook is Ownable2Step, ReentrancyGuard {
         if (gap > 0 && reserveBalance > 0) {
             uint256 cover = gap <= reserveBalance ? gap : reserveBalance;
             reserveBalance -= cover;
+            // Contributed first-loss is meant to be spent here, so the floor follows the buffer down.
+            // Fee income that rebuilds the buffer afterwards is protocol surplus, not contributed
+            // capital, and stays withdrawable. Keeps `reserveFloor <= reserveBalance` invariant-true.
+            if (reserveFloor > reserveBalance) reserveFloor = reserveBalance;
             stable.safeTransfer(address(pool), cover);
             gap -= cover;
             emit ReserveCovered(id, cover);
