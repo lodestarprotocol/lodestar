@@ -62,7 +62,7 @@ body{font-family:Inter,system-ui,sans-serif;color:var(--ink);background:var(--ca
 a{color:inherit;text-decoration:none}
 button{font-family:inherit;cursor:pointer;letter-spacing:-.006em}
 .mut{color:var(--muted)}
-.lbl{font-size:10.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--faint)}
+.lbl{font-size:10px;font-weight:700;letter-spacing:.115em;text-transform:uppercase;color:var(--faint)}
 body:before{content:"";position:fixed;top:0;left:0;right:0;height:2px;background:var(--red);z-index:100}
 
 .shell{display:grid;grid-template-columns:244px 1fr;min-height:100vh}
@@ -71,13 +71,21 @@ body:before{content:"";position:fixed;top:0;left:0;right:0;height:2px;background
 .sb-brand img{height:24px;width:auto}
 .sb-brand b{font-weight:700;font-size:17px;color:var(--ink);letter-spacing:-.03em}
 .sb-nav{padding:8px 12px;display:flex;flex-direction:column}
-.sb-sec{padding:16px 10px 7px}
-.nav-item{position:relative;display:flex;align-items:center;gap:12px;padding:8px 12px;border-radius:7px;color:var(--ink2);font-weight:500;font-size:13.5px;margin:1px 0;cursor:pointer}
-.nav-item svg{width:16px;height:16px;stroke:var(--faint);stroke-width:1.75;fill:none;flex:none}
+.sb-sec{padding:18px 11px 6px}
+.nav-item{position:relative;display:flex;align-items:center;gap:11px;padding:8.5px 11px;border-radius:8px;color:var(--ink2);font-weight:500;font-size:13.5px;margin:1px 0;cursor:pointer}
+/* 1.6 stroke on a 17px box: finer line, slightly larger glyph. Round caps/joins so the arrow
+   terminals and the tray corners read as drawn rather than clipped. */
+.nav-item svg{width:17px;height:17px;stroke:var(--faint);stroke-width:1.6;fill:none;flex:none;stroke-linecap:round;stroke-linejoin:round;transition:stroke .18s ease}
 .nav-item:hover{background:var(--hover)}
-.nav-item.on{color:var(--ink);font-weight:600}
+.nav-item:hover svg{stroke:var(--muted)}
+.nav-item.on{color:var(--ink);font-weight:600;background:var(--hover)}
 .nav-item.on svg{stroke:var(--red)}
-.nav-item.on:before{content:"";position:absolute;left:-12px;top:6px;bottom:6px;width:2.5px;border-radius:2px;background:var(--red)}
+/* Accent bar inset to the item's own left edge rather than at left:-12px, which was exactly the
+   .sb-nav padding and put it hard against the sidebar border where it read as a rendering artifact.
+   Kept as a short centred bar, NOT an inset box-shadow: a shadow follows the 8px radius and curls
+   around the corners into a red bracket. At 18px tall against a ~36px pill it sits on the straight
+   part of the edge, so it stays a clean rectangle. */
+.nav-item.on:before{content:"";position:absolute;left:0;top:50%;transform:translateY(-50%);width:3px;height:18px;border-radius:0 3px 3px 0;background:var(--red);pointer-events:none}
 .sb-foot{margin-top:auto;padding:14px 16px;border-top:1px solid var(--line)}
 .acct{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line-str);border-radius:9px}
 .acct .av{width:26px;height:26px;border-radius:6px;background:var(--red-wash);border:1px solid var(--line);display:grid;place-items:center;color:var(--red);font-weight:700;font-size:12px}
@@ -90,6 +98,7 @@ body:before{content:"";position:fixed;top:0;left:0;right:0;height:2px;background
 .topbar{height:57px;border-bottom:1px solid var(--line);background:var(--card);position:sticky;top:0;z-index:20;display:flex;justify-content:center}
 .topbar-inner{display:flex;align-items:center;gap:14px;height:100%;width:100%;max-width:1720px;padding:0 28px}
 .crumb{font-size:12px;color:var(--faint);font-weight:500}
+@media(min-width:981px){.crumb .cbrand,.crumb .csep{display:none}}  /* sidebar already brands + marks the section */
 .crumb b{color:var(--ink);font-weight:650}
 .tt{font-size:15px;font-weight:650;letter-spacing:-.02em}
 .grow{flex:1}
@@ -107,6 +116,7 @@ body:before{content:"";position:fixed;top:0;left:0;right:0;height:2px;background
 .btn-ln:hover{border-color:var(--ghost);background:var(--hover)}
 .btn-sm{padding:6px 12px;font-size:12.5px}
 .btn-block{width:100%;padding:11px;font-size:13.5px}
+#connect{margin-left:8px}   /* keep the primary CTA off the social/theme icon cluster */
 .icon-btn{width:34px;height:34px;display:grid;place-items:center;border:1px solid var(--line-str);border-radius:8px;background:var(--card);color:var(--ink2)}
 .icon-btn:hover{color:var(--red);border-color:var(--red)}
 .icon-btn svg{width:15px;height:15px}
@@ -118,9 +128,18 @@ body:before{content:"";position:fixed;top:0;left:0;right:0;height:2px;background
 .stats{display:grid;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:11px;overflow:hidden}
 .stats.c4{grid-template-columns:repeat(4,1fr)}
 .stats.c3{grid-template-columns:repeat(3,1fr)}
+.stats.stats-sub .v{font-size:19px}   /* supporting row: reads under the headline row, not beside it */
 .stat{background:var(--card);padding:15px 17px}
 .stat .k{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.02em;display:flex;align-items:center;gap:6px}
 .stat .v{font-size:22px;font-weight:600;margin-top:8px;letter-spacing:-.03em;font-family:var(--mono);font-variant-numeric:tabular-nums}
+/* Pending value. Reuses the existing surface tokens so it adapts to light/dark with no extra rules.
+   color:transparent keeps the placeholder glyph occupying its real line box, so nothing reflows when
+   the number lands. */
+.sk{color:transparent!important;border-radius:6px;display:inline-block;min-width:96px;
+    background:linear-gradient(90deg,var(--hover) 25%,var(--line-str) 37%,var(--hover) 63%);
+    background-size:400% 100%;animation:skm 1.5s ease-in-out infinite}
+@keyframes skm{0%{background-position:100% 50%}100%{background-position:0 50%}}
+@media (prefers-reduced-motion:reduce){.sk{animation:none}}
 .stat .v.t{font-family:Inter}
 .stat .v small{font-size:12px;color:var(--muted);font-weight:500;font-family:Inter}
 .stat .sub{font-size:11px;color:var(--faint);margin-top:3px}
@@ -262,7 +281,7 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
 .toast a{color:#fff;text-decoration:underline}
 @keyframes tin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 /* onboarding */
-.onb{position:fixed;inset:0;background:rgba(10,10,11,.5);backdrop-filter:blur(4px);z-index:250;display:flex;align-items:center;justify-content:center;padding:16px;animation:tin .2s ease}
+.onb{position:fixed;inset:0;background:rgba(10,10,11,.42);backdrop-filter:blur(2px);z-index:250;display:flex;align-items:center;justify-content:center;padding:16px;animation:tin .2s ease}
 .onb-card{background:var(--card);border:1px solid var(--line);border-radius:16px;width:452px;max-width:96vw;padding:26px;box-shadow:0 30px 80px rgba(0,0,0,.3);max-height:92vh;overflow:auto}
 .onb-top{display:flex;align-items:center;gap:11px}
 .onb-top img{height:26px}
@@ -338,8 +357,8 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
     <nav class="sb-nav">
       <div class="sb-sec lbl">Protocol</div>
       <a class="nav-item" data-view="dashboard" href="#dashboard"><svg viewBox="0 0 24 24"><path d="M4 13h6v7H4zM14 4h6v16h-6zM4 4h6v5H4z"/></svg> Dashboard</a>
-      <a class="nav-item" data-view="borrow" href="#borrow"><svg viewBox="0 0 24 24"><path d="M12 4.5v15M6 13.5l6 6 6-6"/></svg> Borrow</a>
-      <a class="nav-item" data-view="lend" href="#lend"><svg viewBox="0 0 24 24"><path d="M12 19.5v-15M6 10.5l6-6 6 6"/></svg> Lend</a>
+      <a class="nav-item" data-view="borrow" href="#borrow"><svg viewBox="0 0 24 24"><path d="M12 3.6v9.6"/><path d="M8.3 9.9l3.7 3.6 3.7-3.6"/><path d="M4.6 15.1v2.9a2 2 0 0 0 2 2h10.8a2 2 0 0 0 2-2v-2.9"/></svg> Borrow</a>
+      <a class="nav-item" data-view="lend" href="#lend"><svg viewBox="0 0 24 24"><path d="M12 13.2V3.6"/><path d="M8.3 7.3L12 3.6l3.7 3.7"/><path d="M4.6 15.1v2.9a2 2 0 0 0 2 2h10.8a2 2 0 0 0 2-2v-2.9"/></svg> Lend</a>
       <a class="nav-item" data-view="portfolio" href="#portfolio"><svg viewBox="0 0 24 24"><path d="M3.5 7l8.5-3.8L20.5 7 12 10.8 3.5 7zM3.5 12l8.5 3.8L20.5 12M3.5 16.5l8.5 3.8 8.5-3.8"/></svg> Portfolio</a>
       <div class="sb-sec lbl">Learn</div>
       <a class="nav-item" data-view="why" href="#why"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 16.5v-5M12 8h.01"/></svg> Why no-liquidation</a>
@@ -377,11 +396,11 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
           <div class="stat"><div class="k">Liquidations</div><div class="v t" style="color:var(--pos)">0 <small>by design</small></div><div class="sub">deadline-based settlement</div></div>
         </div>
 
-        <div class="stats c4 mt">
-          <div class="stat"><div class="k">Lenders</div><div class="v t" id="d-lenders">…</div><div class="sub">USD₮0 suppliers</div></div>
-          <div class="stat"><div class="k">Borrowers</div><div class="v t" id="d-borrowers">…</div><div class="sub">open positions</div></div>
-          <div class="stat"><div class="k">Lifetime fees paid</div><div class="v" id="d-fees">…</div><div class="sub">one-time borrower fees</div></div>
-          <div class="stat"><div class="k">Est. lender APY</div><div class="v t" style="color:var(--red)" id="d-apy">…</div><div class="sub" id="d-apy-sub">at current utilization</div></div>
+        <div class="stats c4 mt stats-sub">
+          <div class="stat"><div class="k">Lenders</div><div class="sk v t" id="d-lenders">…</div><div class="sub">USD₮0 suppliers</div></div>
+          <div class="stat"><div class="k">Borrowers</div><div class="sk v t" id="d-borrowers">…</div><div class="sub">open positions</div></div>
+          <div class="stat"><div class="k">Lifetime fees paid</div><div class="sk v" id="d-fees">…</div><div class="sub">one-time borrower fees</div></div>
+          <div class="stat"><div class="k">Est. lender APY</div><div class="sk v t" style="color:var(--red)" id="d-apy">…</div><div class="sub" id="d-apy-sub">at current utilization</div></div>
         </div>
 
         <div class="sec-h"><h2>Where borrower fees go</h2><span>every fee works for lenders</span></div>
@@ -466,7 +485,7 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
               <div class="prow"><span class="l">Utilization</span><span class="r" id="l-util">0%</span></div>
               <div class="prow"><span class="l">Utilization ceiling</span><span class="r" id="l-ceil">80%</span></div>
               <div class="prow"><span class="l">Share price</span><span class="r" id="l-sp">1.0000</span></div>
-              <div class="prow"><span class="l">Lenders</span><span class="r" id="l-lenders">…</span></div>
+              <div class="prow"><span class="l">Lenders</span><span class="r sk" id="l-lenders">…</span></div>
               <div class="lbl" style="margin-top:18px">Collateral prices</div>
               <div class="prow mt" style="padding-top:0"><span class="l">FXRP</span><span class="r" id="lpx-FXRP">…</span></div>
               <div class="prow"><span class="l">stXRP</span><span class="r" id="lpx-STXRP">…</span></div>
@@ -741,7 +760,7 @@ async function scanLoans(nextId){
 function renderLoanStats(){
   const c=lcLoad();
   const fees=c.fees+LIVE.fees;
-  setTx("d-borrowers",String(LIVE.borrowers.size));
+  setTx("d-borrowers",num(LIVE.borrowers.size));
   setTx("d-fees",usd(fees));
   const LS=STATS.lenderShare??0.8;
   setTx("d-fee-lenders",usd(fees*LS)); setTx("d-fee-reserve",usd(fees*(1-LS)));
@@ -786,6 +805,7 @@ const $=id=>document.getElementById(id);
 // first copy, so row-scoped lookups must prefer the copy inside the currently ACTIVE view
 const vEl=id=>document.querySelector('.view.active [id="'+id+'"]')||document.getElementById(id);
 const usd=n=>"$"+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const num=n=>Number(n).toLocaleString('en-US');   // counts, so 3244 reads as 3,244 like every $ figure does
 const priceUsd=n=>"$"+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:n<1?6:4}); // asset prices need more precision
 const BAL={FXRP:0n,USDT0:0n};
 function toast(msg,type,ms){const c=$("toasts");if(!c)return;const el=document.createElement("div");el.className="toast"+(type?" "+type:"");el.innerHTML=`<div>${msg}</div><span class="tclose" onclick="this.parentElement.remove()">✕</span>`;c.appendChild(el);setTimeout(()=>el.remove(),ms||6500);}
@@ -823,7 +843,7 @@ function rows(){
       <td><span class="tprice" id="px-${k}">…</span><div class="px-live"><span class="dot"></span> live · FTSOv2</div>${m.hc?`<div class="px-live" id="pxc-${k}"></div>`:""}</td>
       <td><span class="pill">${ml}%</span></td><td class="mono">${lo}–${hi}d</td><td class="mono">${mf.toFixed(1)}%</td>
       <td>${m.live?'<span class="pill ok">Live</span>':'<span class="pill">Soon</span>'}</td>
-      <td>${m.live?`<button class="btn btn-ln btn-sm" onclick="goBorrow('${k}')">Borrow</button>`:'<button class="btn btn-ln btn-sm" disabled style="opacity:.45;cursor:default">Soon</button>'}</td>
+      <td>${m.live?`<button class="btn btn-ln btn-sm" onclick="goBorrow('${k}')">Borrow</button>`:''}</td>
     </tr>`;}).join("");
 }
 window.goBorrow=k=>{document.querySelectorAll('#collSeg button').forEach(b=>b.classList.toggle('on',b.dataset.c===k));setColl(k);location.hash="#borrow";};
@@ -852,7 +872,7 @@ function preview(){const m=MK[COLL],t=m.tiers[TIER],a=parseFloat($("amt").value)
 document.querySelectorAll('#collSeg button').forEach(b=>b.onclick=()=>{document.querySelectorAll('#collSeg button').forEach(x=>x.classList.remove('on'));b.classList.add('on');setColl(b.dataset.c);});
 $("amt").addEventListener('input',preview);$("lamt").addEventListener('input',preview);
 
-function setTx(id,v){const el=$(id);if(el)el.textContent=v;}
+function setTx(id,v){const el=$(id);if(el){el.textContent=v;el.classList.remove("sk");}}
 function timeAgo(s){ if(!s)return""; const d=Math.max(0,Math.floor(Date.now()/1000)-s); if(d<60)return d+"s ago"; const m=Math.floor(d/60); if(m<60)return m+"m ago"; const h=Math.floor(m/60); if(h<24)return h+"h ago"; return Math.floor(h/24)+"d ago"; }
 // ONE multicall: prices + pool stats + loan count + every seed-LP balance. A second: every loan (fees/borrowers/activity).
 async function loadChain(){
@@ -952,7 +972,7 @@ async function loadChain(){
   const sp=STATS.ts>0?tvl/(STATS.ts/1e12):1;
   setTx("d-tvl",usd(tvl));setTx("d-borrowed",usd(borrowed));setTx("d-util",util.toFixed(1)+"% utilization");
   setTx("l-tvl",usd(tvl));setTx("l-util",util.toFixed(1)+"%");setTx("l-sp",sp.toLocaleString('en-US',{minimumFractionDigits:4,maximumFractionDigits:4}));
-  if(r[5]) setTx("d-loans",String(Number(r[5][0])));
+  if(r[5]) setTx("d-loans",num(Number(r[5][0])));
   const nextId=r[6]?Number(r[6][0]):1;
   if(r[7]) STATS.minPrincipal=Number(r[7][0])/1e6; // smallest borrowable loan, in USD₮0
   if(r[8]&&Number(r[8][0])<=10000) STATS.lenderShare=(10000-Number(r[8][0]))/10000; // live fee split
@@ -969,7 +989,7 @@ async function loadChain(){
   // Lender count: the explorer index (true holder count) is authoritative once it resolves; only fall
   // back to the seed-list heuristic before that, so the number never flickers back down on a refresh.
   let lenders=0; for(let i=0;i<SEED_LP.length;i++){ const b=r[seedStart+i]; if(b&&b[0]>0n) lenders++; }
-  if(STATS.lendersExact==null){ const lv=String(lenders||(tvl>0?1:0)); setTx("d-lenders",lv); setTx("l-lenders",lv); }
+  if(STATS.lendersExact==null){ const lv=num(lenders||(tvl>0?1:0)); setTx("d-lenders",lv); setTx("l-lenders",lv); }
   preview();
   // second batch: lifetime fees, active borrowers, activity — via the incremental loan cache
   // (only open loans + newly minted ids are fetched; closed history comes from localStorage).
@@ -988,7 +1008,7 @@ async function fetchLenderCount(){
     const res=await fetch(EXPLORER+"/api/v2/tokens/"+POOL,{headers:{accept:"application/json"}});
     if(!res.ok) return;
     const d=await res.json(); const h=parseInt(d.holders||d.holders_count,10);
-    if(Number.isFinite(h)&&h>0){ _lenderCountAt=now; STATS.lendersExact=h; const s=String(h); setTx("d-lenders",s); setTx("l-lenders",s); try{localStorage.setItem("lode_lenders",s);}catch(_){} }
+    if(Number.isFinite(h)&&h>0){ _lenderCountAt=now; STATS.lendersExact=h; const s=num(h); setTx("d-lenders",s); setTx("l-lenders",s); try{localStorage.setItem("lode_lenders",String(h));}catch(_){} }
   }catch(_){/* keep the heuristic already shown; retry on the next refresh (cache only set on success) */}
 }
 // live activity feed = loan events (from the loan book, no getLogs) + supply/withdraw events
@@ -1414,7 +1434,7 @@ function init(){
   // restore the last-known true lender count instantly (no seed-heuristic flash on repeat visits);
   // fetchLenderCount then revalidates it. Marking STATS.lendersExact keeps the seed count from
   // overwriting it before the fresh fetch lands.
-  try{ const c=localStorage.getItem("lode_lenders"); if(c){ STATS.lendersExact=parseInt(c,10); setTx("d-lenders",c); setTx("l-lenders",c); } }catch(_){}
+  try{ const c=localStorage.getItem("lode_lenders"); if(c){ STATS.lendersExact=parseInt(c,10); setTx("d-lenders",num(c)); setTx("l-lenders",num(c)); } }catch(_){}
   rows();terms();setColl("FXRP");calcEcon();route();loadChain();
   // Overlap guard: if a refresh is still in flight (slow RPC), skip the tick instead of stacking
   // a second giant request behind it — stacked refreshes were compounding the lag.
