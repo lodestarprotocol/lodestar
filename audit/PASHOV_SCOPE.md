@@ -122,8 +122,10 @@ blocks new dust; it cannot evict a loan that already holds a slot.
 **Points a reviewer should press on:**
 
 - **Quadratic, not linear, and why.** A linear ramp reaches $212 at 50/400 loans, taxing ordinary
-  borrowers. Squared it is $114 at 50/400 and $1,000 only at the final slot, so it is invisible until
-  slots are genuinely scarce. Monotonic non-decreasing in `activeLoanIds.length`.
+  borrowers. Squared it is $114 at 50/400, and $995 at the final slot -- `used` excludes the loan
+  being opened, so the last slot pays (cap-1)^2/cap^2 = 99.5% of the maximum, not 100%. That is
+  deliberate: pricing on the book as it stands keeps `minPrincipal` reachable on an empty book,
+  which is the floor a borrower is quoted. Monotonic non-decreasing in `activeLoanIds.length`.
 - **No new invariant to maintain.** The value is a pure function of state `open()` already reads.
   A reserved-slot quota was the alternative and was rejected: it needs a counter kept correct across
   open, repay, partialRepay, settle and default, and each path is a chance to desync.

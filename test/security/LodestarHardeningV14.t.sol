@@ -200,7 +200,10 @@ contract LodestarHardeningV14Test is Test {
         vm.expectRevert(LodestarLoanBook.TooManyActiveLoans.selector);
         book.open(address(fxrp), 1_000e6, 0);
         vm.stopPrank();
-        assertGt(collateralLocked, 0, "griefer capital not locked");
+        // Assert against the CURRENT book balance, not a value captured before the fill loop. The
+        // earlier form read a pre-fill snapshot and asserted it was > 0, which proved nothing.
+        assertEq(fxrp.balanceOf(address(book)), totalLocked, "griefer capital must be locked in the book");
+        assertGt(totalLocked, flatCost, "and it must exceed the pre-premium flat cost");
     }
 
     function test_MaxActiveLoansSetterBounded() public {

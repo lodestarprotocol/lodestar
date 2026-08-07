@@ -231,8 +231,14 @@ contract LodestarLoanBook is Ownable2Step, ReentrancyGuard {
     function effectiveMinPrincipal() public view returns (uint256) {
         uint256 cap = maxActiveLoans;
         if (slotPremiumBps == 0 || cap == 0) return minPrincipal;
+        // `used` deliberately EXCLUDES the loan being opened. This view is read in `open()` before
+        // `_addActive`, so the premium is priced on the book as it stands, which keeps the invariant
+        // that an empty book charges exactly `minPrincipal` -- the floor a borrower is quoted must be
+        // reachable. The cost is that the final slot pays (cap-1)^2/cap^2 of the maximum, 99.5% at
+        // cap 400, not 100%. Counting the pending loan instead would tax the very first borrower to
+        // buy that last 0.5%, which is the wrong trade.
         uint256 used = activeLoanIds.length;
-        if (used > cap) used = cap; // defensive: cap can be lowered below the current book
+        if (used > cap) used = cap; // clamp: cap can be lowered below the current book
         // QUADRATIC in fullness, not linear. A linear ramp taxes the very first borrowers: at a $100
         // floor and a 400 cap it already demands $212 once 50 loans are open, which prices out the
         // small borrowers this protocol exists to serve. Squaring makes the premium negligible until
@@ -602,7 +608,16 @@ contract LodestarLoanBook is Ownable2Step, ReentrancyGuard {
         uint256 oldPrincipal = L.principal;
         if (repayAmount == 0 || repayAmount >= oldPrincipal) revert BadParam();
         uint256 newPrincipal = oldPrincipal - repayAmount;
-        if (newPrincipal < minPrincipal) revert BadParam(); // no dust loans left behind
+        // A pure paydown keeps the FLAT floor: shrinking a loan consumes no slot, and blocking it
+        // because strangers filled the book would trap a borrower trying to de-risk.
+        //
+        // A paydown that also RELEASES collateral is different. It hands the capital straight back
+        // while the slot stays occupied, which let a squatter open at the ramped floor, claw
+        // everything out, and recycle it into the next slot -- making the premium refundable and
+        // reducing it to a fee. Releasing collateral therefore has to leave the loan above the
+        // ramped floor. See SlotPremiumBypass.t.sol.
+        uint256 floorNow = collateralOut > 0 ? effectiveMinPrincipal() : uint256(minPrincipal);
+        if (newPrincipal < floorNow) revert BadParam(); // no dust loans left behind
 
         // --- collateral release gate: healthy remainder at CURRENT price, never post-default ---
         if (collateralOut > 0) {

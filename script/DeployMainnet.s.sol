@@ -75,6 +75,12 @@ contract DeployMainnet is Script {
     // hard-bounded to 400 in the contract and squatted loans persist to maturity (up to 30 days),
     // whereas exposure-cap exhaustion is cleared by a single setExposureCap call. 0 disables it.
     uint32 constant SLOT_PREMIUM_BPS = 90_000;
+    // The constructor defaults maxActiveLoans to 300 and this script never set it, so mainnet would
+    // have shipped at 300 while the slot-premium reasoning, its comments and the audit note all
+    // assume 400. Set it explicitly. 400 is the contract's hard ceiling; the exit-sweep measurement
+    // in test/SweepGasCeiling.t.sol is what justifies it (~9.9M gas in a mass crash, 35% of a 28M
+    // block), so this is the largest value that measurement supports.
+    uint32 constant MAX_ACTIVE_LOANS = 400;
     uint256 constant SEED_MIN = 10e6; // $10 minimum first-deposit seed; deploy reverts if unseeded
     // GUARDED LAUNCH: tiny per-collateral borrow cap bounds the MAX possible loss from any tail risk
     // (incl. the sFLR rate provider being upgradeable by a single external EOA) to the cap size — a
@@ -128,6 +134,7 @@ contract DeployMainnet is Script {
 
         book.setMinPrincipal(MIN_PRINCIPAL);
         book.setSlotPremiumBps(SLOT_PREMIUM_BPS); // explicit at launch, not left to the constructor default
+        book.setMaxActiveLoans(MAX_ACTIVE_LOANS); // ditto: the default is 300, not the 400 we reason about
 
         // ---- tiers + exposure caps ----
         // TIERS ARE APPEND-ONLY AND IMMUTABLE: addTier can never be edited or removed, and a
