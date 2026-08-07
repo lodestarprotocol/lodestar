@@ -130,9 +130,13 @@ blocks new dust; it cannot evict a loan that already holds a slot.
 - **It gates `open()` only.** `partialRepay` keeps the flat `minPrincipal` floor deliberately —
   paying a loan DOWN consumes no slot, and applying the ramp there would trap a borrower because
   strangers filled the book. Asserted by `test_PartialRepayUsesFlatFloor_EvenWhenBookIsFull`.
-- **Overflow.** `minPrincipal <= 1e10` (setter ceiling, $10k at 6dp), `slotPremiumBps <= 200_000`
-  (setter ceiling), `used*used <= cap*cap <= 160_000`. Numerator peaks around 3.2e20, far below
-  `uint256`.
+- **Overflow.** `minPrincipal` is bounded by `setMinPrincipal` to `10_000 * stableUnit`, so the
+  ceiling depends on the pool asset's decimals: 1e10 for a 6-decimal stable (USD₮0, the deployed
+  case) and 1e22 for an 18-decimal one. With `slotPremiumBps <= 200_000` and
+  `used*used <= cap*cap <= 160_000`, the intermediate peaks at 3.2e20 in the 6dp case and 3.2e32 in
+  the worst 18dp case, both far below `uint256` (~1.16e77). Asserted by
+  `test_NoOverflowAtExtremeParameters` (a FULL book at both setter ceilings, not an empty one) and
+  `test_OverflowHeadroomIsStatedCorrectly`.
 - **Clamp.** `maxActiveLoans` can be lowered below the live book size; `used` is clamped to `cap` so
   the premium saturates rather than exceeding its bound. Asserted by
   `test_CapLoweredBelowBookDoesNotBreakTheView`.

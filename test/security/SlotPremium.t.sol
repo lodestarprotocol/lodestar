@@ -152,13 +152,35 @@ contract SlotPremiumTest is Test {
         assertEq(v, max, "clamped to the full premium, never beyond");
     }
 
+    /// @dev An earlier version of this test set the extreme parameters but read an EMPTY book, where
+    ///      used == 0 zeroes the whole premium term. It therefore exercised none of the arithmetic it
+    ///      claimed to. Fill the book FIRST at a cheap floor, then raise both ceilings and read the
+    ///      view, so the intermediate `minPrincipal * slotPremiumBps * used * used` is at its maximum
+    ///      without needing a multi-million-dollar pool to fill 400 slots at a $10k floor.
     function test_NoOverflowAtExtremeParameters() public {
-        book.setMinPrincipal(uint128(10_000e6)); // the setter's ceiling
-        book.setSlotPremiumBps(200_000); // the setter's ceiling
         book.setMaxActiveLoans(400);
-        // view must be callable and bounded even with everything maxed
+        book.setMinPrincipal(uint128(100e6));
+        _fillTo(400); // cheap fill at the low floor
+        assertEq(book.activeLoanCount(), 400, "book not full");
+
+        book.setMinPrincipal(uint128(10_000e6)); // setter ceiling
+        book.setSlotPremiumBps(200_000); // setter ceiling
+        // used == cap == 400 now, so the numerator is minPrincipal * 200_000 * 400 * 400 = 3.2e20
         uint256 v = book.effectiveMinPrincipal();
-        assertEq(v, 10_000e6, "empty book, so still exactly the floor");
+        uint256 expected = uint256(10_000e6) + (uint256(10_000e6) * 200_000) / 10_000; // 21x
+        assertEq(v, expected, "full book at both ceilings must equal minPrincipal * 21");
+        assertEq(v, 210_000e6, "sanity: $10k floor -> $210k at a completely full book");
+    }
+
+    /// @dev The overflow bound depends on stableUnit, which is read from the pool asset at
+    ///      construction. USD₮0 is 6dp so minPrincipal tops out at 1e10, but an 18dp stable would
+    ///      allow 1e22 and the intermediate becomes 1e22 * 2e5 * 1.6e5 = 3.2e32. Still far below
+    ///      uint256 (~1.16e77), but the audit note should state the general bound, not the 6dp one.
+    function test_OverflowHeadroomIsStatedCorrectly() public pure {
+        uint256 minPrincipal18dp = 10_000 * 1e18; // the setter ceiling on an 18-decimal stable
+        uint256 worst = minPrincipal18dp * 200_000 * 400 * 400;
+        assertEq(worst, 3.2e32, "worst-case numerator");
+        assertLt(worst, type(uint256).max / 1e40, "orders of magnitude of headroom remain");
     }
 
     // --------------------------------------------------------------- must NOT gate exits
