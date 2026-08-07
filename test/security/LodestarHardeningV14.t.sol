@@ -142,29 +142,65 @@ contract LodestarHardeningV14Test is Test {
 
     // ---- v1.6: loan-slot-exhaustion DoS is priced out by a meaningful minPrincipal -----------
     function test_SlotExhaustionRequiresRealCapital() public {
-        // With a mainnet-grade minPrincipal, filling the loan cap costs real, locked capital.
-        book.setMaxActiveLoans(50); // small cap for a fast test
-        book.setMinPrincipal(uint128(100e6)); // $100 min loan (mainnet-style, not the $10 testnet)
-        // a $100 principal at 50% LTV needs $200 collateral = 80 FXRP; filling 50 slots = $10k locked
-        uint256 fxrpNeeded = 80e6;
+        // Filling every slot used to cost a flat minPrincipal per slot. The slot premium makes the
+        // floor rise quadratically with book fullness, so buying the whole book costs the integral
+        // under that ramp instead. This matters because slot exhaustion is the one capacity attack
+        // that CANNOT be undone reactively: maxActiveLoans is hard-capped at 400 and the squatted
+        // loans sit there until they mature, up to 30 days.
+        book.setMaxActiveLoans(50);
+        book.setMinPrincipal(uint128(100e6)); // $100 floor (mainnet-style)
+
+        // The flat-floor attack is now impossible: a $100 loan stops being accepted once the ramp
+        // lifts the floor above it.
+        uint256 flat = 80e6; // 80 FXRP -> $200 collateral -> $100 principal at 50% LTV
+        uint256 openedAtFlat;
         for (uint256 i; i < 50; i++) {
             address b = address(uint160(0xDEAD00 + i));
-            fxrp.mint(b, fxrpNeeded);
+            fxrp.mint(b, flat);
             vm.startPrank(b);
             fxrp.approve(address(book), type(uint256).max);
-            book.open(address(fxrp), fxrpNeeded, 0);
+            try book.open(address(fxrp), flat, 0) {
+                openedAtFlat++;
+            } catch {
+                vm.stopPrank();
+                break;
+            }
+            vm.stopPrank();
+        }
+        assertLt(openedAtFlat, 50, "flat-floor loans should no longer be able to fill the book");
+        assertGt(book.effectiveMinPrincipal(), 100e6, "floor did not rise with fullness");
+
+        // Taking the remaining slots requires progressively larger loans. Fill the book honestly and
+        // measure what it actually costs, versus the flat cost the attack used to need.
+        uint256 collateralLocked = fxrp.balanceOf(address(book));
+        for (uint256 i; i < 500 && book.activeLoanCount() < 50; i++) {
+            uint256 need = book.effectiveMinPrincipal(); // stable units
+            // principal = collateral * price * ltv; at $2.50 and 50% LTV, collateral = principal * 0.8
+            uint256 coll = (need * 8) / 10 + 1e6; // +1 FXRP of headroom for rounding
+            address b = address(uint160(0xBEEF00 + i));
+            fxrp.mint(b, coll);
+            vm.startPrank(b);
+            fxrp.approve(address(book), type(uint256).max);
+            book.open(address(fxrp), coll, 0);
             vm.stopPrank();
         }
         assertEq(book.activeLoanCount(), 50, "cap not reached");
-        // the 51st open is blocked (the DoS state) — but it cost the griefer $10k of locked FXRP
-        fxrp.mint(borrower, fxrpNeeded);
+
+        uint256 totalLocked = fxrp.balanceOf(address(book));
+        uint256 flatCost = 50 * flat; // what the old flat attack needed
+        assertGt(totalLocked, flatCost, "filling the book should now cost more than the flat floor");
+        emit log_named_uint("collateral to fill the book, flat floor (old)", flatCost);
+        emit log_named_uint("collateral to fill the book, with ramp (new)", totalLocked);
+        emit log_named_uint("cost multiple (x100)", (totalLocked * 100) / flatCost);
+
+        // Original property retained: the cap still blocks the next open, and the capital is locked.
+        fxrp.mint(borrower, 1_000e6);
         vm.startPrank(borrower);
         fxrp.approve(address(book), type(uint256).max);
         vm.expectRevert(LodestarLoanBook.TooManyActiveLoans.selector);
-        book.open(address(fxrp), fxrpNeeded, 0);
+        book.open(address(fxrp), 1_000e6, 0);
         vm.stopPrank();
-        // custody proves the capital is genuinely locked (50 * 80 FXRP), i.e. the attack has a cost
-        assertEq(fxrp.balanceOf(address(book)), 50 * fxrpNeeded, "griefer capital not locked");
+        assertGt(collateralLocked, 0, "griefer capital not locked");
     }
 
     function test_MaxActiveLoansSetterBounded() public {

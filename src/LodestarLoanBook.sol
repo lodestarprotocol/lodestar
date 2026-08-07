@@ -111,6 +111,11 @@ contract LodestarLoanBook is Ownable2Step, ReentrancyGuard {
     bool public paused; // blocks NEW borrows only; repay/rollover/settle stay open (non-custodial)
     uint16 public yieldSkimBps; // 0 = borrower keeps all collateral appreciation (default; cap 50%)
     uint128 public minPrincipal; // dust guard: smallest loan the book will write
+    /// @dev Slot-exhaustion guard. The minimum loan ramps from `minPrincipal` on an empty book to
+    ///      `minPrincipal * (1 + slotPremiumBps/1e4)` as active loans approach `maxActiveLoans`, so
+    ///      buying up every slot costs the integral under that ramp rather than a flat
+    ///      `minPrincipal * maxActiveLoans`. 0 disables it (exactly the pre-v1.9 behaviour).
+    uint32 public slotPremiumBps;
 
     /// @dev With the cached price as reference, the floor decays to zero over this window
     ///      once past `oracleFallbackDelay`, so a dead oracle can delay settlement but
@@ -211,7 +216,32 @@ contract LodestarLoanBook is Ownable2Step, ReentrancyGuard {
         stableDecimals = IERC20Metadata(_pool.asset()).decimals();
         stableUnit = 10 ** stableDecimals;
         minPrincipal = uint128(10 * stableUnit);
+        // 9x at a full book: a $100 floor becomes $1,000 for the last slot. Chosen so the ramp bites
+        // a griefer buying the whole book while staying invisible to normal borrowing, which at the
+        // launch exposure cap never gets near the slot ceiling.
+        slotPremiumBps = 90_000;
         reserve = _reserve;
+    }
+
+    /// @notice The smallest loan the book will write RIGHT NOW.
+    /// @dev Rises with book fullness so an attacker cannot occupy every slot at the flat floor.
+    ///      Monotonic in `activeLoanIds.length`, equal to `minPrincipal` when the book is empty, and
+    ///      never more than `minPrincipal * (1 + slotPremiumBps/1e4)`. Pure function of existing
+    ///      state: no storage is added and nothing can fall out of sync.
+    function effectiveMinPrincipal() public view returns (uint256) {
+        uint256 cap = maxActiveLoans;
+        if (slotPremiumBps == 0 || cap == 0) return minPrincipal;
+        uint256 used = activeLoanIds.length;
+        if (used > cap) used = cap; // defensive: cap can be lowered below the current book
+        // QUADRATIC in fullness, not linear. A linear ramp taxes the very first borrowers: at a $100
+        // floor and a 400 cap it already demands $212 once 50 loans are open, which prices out the
+        // small borrowers this protocol exists to serve. Squaring makes the premium negligible until
+        // the book is genuinely scarce (12.5% full -> $114) and steep only at the end ($1,000 at the
+        // last slot), so it deters buying the WHOLE book without touching ordinary borrowing.
+        // Bounds: minPrincipal <= 1e10 (a $10k cap at 6dp), slotPremiumBps <= 2e5, used*used <= cap*cap,
+        // so the numerator stays far below uint256 for any reachable cap.
+        return uint256(minPrincipal)
+            + (uint256(minPrincipal) * slotPremiumBps * used * used) / (cap * cap * 10_000);
     }
 
     // ------------------------------------------------------------------ admin
@@ -267,6 +297,14 @@ contract LodestarLoanBook is Ownable2Step, ReentrancyGuard {
     function setKeeperCapUsd18(uint128 capUsd18) external onlyOwner {
         if (capUsd18 == 0 || capUsd18 > 10_000e18) revert BadParam();
         keeperCapUsd18 = capUsd18;
+    }
+
+    /// @notice Tune the slot-exhaustion ramp. 0 disables it; 200_000 = 20x at a full book.
+    /// @dev Bounded so it can never price out ordinary borrowing: at the ceiling a $100 floor
+    ///      becomes $2,100 only when the book is completely full, and is unchanged when it is empty.
+    function setSlotPremiumBps(uint32 bps) external onlyOwner {
+        if (bps > 200_000) revert BadParam();
+        slotPremiumBps = bps;
     }
 
     function setMinPrincipal(uint128 amount) external onlyOwner {
@@ -433,7 +471,10 @@ contract LodestarLoanBook is Ownable2Step, ReentrancyGuard {
         exposureUsd18[collateral] += principalUsd18;
 
         uint256 principal = _usd18ToStable(principalUsd18);
-        if (principal < minPrincipal || principal == 0) revert BadParam();
+        // Slot-exhaustion guard: the floor rises as the book fills. partialRepay deliberately
+        // keeps the flat `minPrincipal` check -- paying a loan DOWN frees nothing to ration and
+        // must never be blocked because someone else filled the book.
+        if (principal < effectiveMinPrincipal() || principal == 0) revert BadParam();
         uint256 fee = (principal * t.feeBps) / 10_000;
 
         id = nextLoanId++;

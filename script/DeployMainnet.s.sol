@@ -67,6 +67,14 @@ contract DeployMainnet is Script {
     uint16 constant STXRP_HAIRCUT = 600; // 6% on stXRP: newer Firelight vault -> extra conservatism
     uint16 constant RATE_CLAMP_BPS_PER_DAY = 20; // LST valuation-rate growth allowance (see setRateClamp)
     uint128 constant MIN_PRINCIPAL = 100e6; // $100 floor: prices out slot-exhaustion of maxActiveLoans
+    // SLOT-EXHAUSTION RAMP: the minimum loan rises quadratically with book fullness, so occupying
+    // every one of the 400 slots costs the integral under the ramp rather than a flat
+    // MIN_PRINCIPAL * 400. 90_000 = 9x at a completely full book ($100 -> $1,000 for the last slot)
+    // and is negligible below ~25% full ($114 at 50/400), so ordinary borrowing never sees it.
+    // This guards the one capacity attack that CANNOT be undone reactively: maxActiveLoans is
+    // hard-bounded to 400 in the contract and squatted loans persist to maturity (up to 30 days),
+    // whereas exposure-cap exhaustion is cleared by a single setExposureCap call. 0 disables it.
+    uint32 constant SLOT_PREMIUM_BPS = 90_000;
     uint256 constant SEED_MIN = 10e6; // $10 minimum first-deposit seed; deploy reverts if unseeded
     // GUARDED LAUNCH: tiny per-collateral borrow cap bounds the MAX possible loss from any tail risk
     // (incl. the sFLR rate provider being upgradeable by a single external EOA) to the cap size — a
@@ -119,6 +127,7 @@ contract DeployMainnet is Script {
         pool.setLoanBook(address(book));
 
         book.setMinPrincipal(MIN_PRINCIPAL);
+        book.setSlotPremiumBps(SLOT_PREMIUM_BPS); // explicit at launch, not left to the constructor default
 
         // ---- tiers + exposure caps ----
         // TIERS ARE APPEND-ONLY AND IMMUTABLE: addTier can never be edited or removed, and a
