@@ -3,6 +3,10 @@
 **Commit: `e0ac90e` — `Slot-exhaustion premium: price the last slots so the book can't be squatted`**
 Repo: `github.com/lodestarprotocol/lodestar`, branch `main`. Prepared 2026-08-06, re-pinned 2026-08-07.
 
+The pin refers to the state of `src/`. Later commits on `main` may touch this document, the dapp
+or tests without changing `src/`; verify with `git diff e0ac90e..main -- src/`, which must be
+empty. Reviewing `main` at or after `e0ac90e` therefore reviews the same contracts.
+
 This supersedes `43ee872`, `1a66b01` and `c0fc6b1a`. Two Solidity deltas since `1a66b01`, both in
 `LodestarLoanBook.sol` and both described below: the first-loss buffer (§4) and the slot-exhaustion
 premium (§4b). Everything else in the intervening commits is dapp, docs or tests.
