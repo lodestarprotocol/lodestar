@@ -668,15 +668,36 @@ async function verifyChain(eip){
     return ok;
   }catch(_){ setWrongChain(true,null); return false; }
 }
+// Reads failing is a different condition from the wallet being on the wrong chain, and both can be
+// true at once. `setWrongChain` wins when they are: a user on the wrong network has to fix that
+// first, and painting "Network unavailable" over it would hide the actionable message.
+let CHAIN_OFFLINE=false, _offlineToasted=false;
+function setChainOffline(off){
+  CHAIN_OFFLINE=!!off;
+  if(!off) _offlineToasted=false;               // re-arm, so a SECOND outage is reported too
+  const badge=document.querySelector(".net.net-test");
+  if(badge && !WRONG_CHAIN){
+    badge.innerHTML = off ? '<i></i> Network unavailable' : '<i></i> '+esc(NET_LABEL);
+    badge.style.color = off ? "var(--red)" : "";
+    badge.style.borderColor = off ? "var(--red)" : "";
+    badge.title = off ? ("Could not reach any "+CHAIN_NAME+" RPC endpoint. Figures below may be stale.") : "";
+  }
+  if(off && !_offlineToasted){
+    _offlineToasted=true;                        // once per outage, not once per 30s refresh
+    toast("Can't reach "+esc(CHAIN_NAME)+" right now, so the figures below may be stale or blank. Your funds are unaffected — this is only what this page can read. It will recover on its own.","warn",14000);
+  }
+}
 function setWrongChain(bad, sawId){
   WRONG_CHAIN=!!bad;
   const badge=document.querySelector(".net.net-test");
   if(badge){
     // Driven off CHAIN_NAME: hardcoding "Coston2 Testnet" here would survive the mainnet
     // switchover and relabel the badge on Flare mainnet. See MAINNET_SWITCHOVER.md.
-    badge.innerHTML = bad ? '<i></i> Wrong network' : '<i></i> '+esc(NET_LABEL);
-    badge.style.color = bad ? "var(--red)" : "";
-    badge.style.borderColor = bad ? "var(--red)" : "";
+    // Clearing "Wrong network" must not also clear an offline state that is still true.
+    const off = !bad && CHAIN_OFFLINE;
+    badge.innerHTML = bad ? '<i></i> Wrong network' : (off ? '<i></i> Network unavailable' : '<i></i> '+esc(NET_LABEL));
+    badge.style.color = (bad||off) ? "var(--red)" : "";
+    badge.style.borderColor = (bad||off) ? "var(--red)" : "";
     badge.title = bad && sawId ? ("Wallet is on chainId "+sawId+"; Lodestar is on "+CHAIN_DEC) : "";
   }
   const bb=$("borrowBtn"), lb=$("lendBtn");
@@ -938,7 +959,6 @@ function timeAgo(s){ if(!s)return""; const d=Math.max(0,Math.floor(Date.now()/10
 async function loadChain(){
   await probeRpc(); // settle on a live endpoint before any read, incl. the block-number tile
   const p=readProvider();
-  p.getBlockNumber().then(b=>setTx("netblock","#"+b)).catch(()=>{});
   fetchLenderCount(); // fire in parallel with the multicall so the true holder count lands ASAP
   fetchSupplyActs(); // pull lodUSD₮0 mint/burn (supply/withdraw) events for the activity feed
   const base=[
@@ -985,7 +1005,10 @@ async function loadChain(){
   const capStart=base.length;
   pxKeys.forEach(k=>base.push({t:BOOK,i:IBOOK,f:"exposureCapUsd18",a:[MK[k].addr]}));
   let r;
-  try{ r=await mc(base); }catch(e){ setTx("netblock","offline"); console.error("chain",e); return; }
+  // Was `setTx("netblock", ...)`, which targeted an element that does not exist — so a total
+  // RPC failure left every figure shimmering as a skeleton with no explanation at all.
+  try{ r=await mc(base); }catch(e){ setChainOffline(true); console.error("chain",e); return; }
+  setChainOffline(false); // a read got through: clear any offline state and re-arm the toast
   const px=v=>v?Number(v[0])/10**Number(v[1]):0;
   const xrp=r[0]?px(r[0]):0, flr=r[1]?px(r[1]):0;
   // each collateral: feed price x staking rate x (1 - haircut), so preview matches the oracle valuation.
