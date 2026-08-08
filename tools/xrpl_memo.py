@@ -57,6 +57,23 @@ def encode_approve(spender: str, amount: int) -> bytes:
     )
 
 
+# DELIBERATELY the 3-argument form, though the book also has
+#   open(address,uint256,uint256,uint256 minOut,uint256 deadline)
+# and the XRPL relay window is the exact case that overload was written for: the user signs an XRPL
+# Payment and an executor submits on Flare whenever it suits them, so the submitter chooses the
+# moment the collateral is priced.
+#
+# It is NOT a mechanical switch, because of the failure semantics documented at the top of this file:
+# a rejected instruction is rejected AFTER the user's XRP has left their wallet and FXRP has minted
+# into their PersonalAccount. An expired deadline or a tripped minOut therefore does not return them
+# to where they started -- it leaves them holding FXRP in an account they may have no idea how to
+# drive, pending a second instruction. That can easily be worse than a borrow that filled a few
+# percent smaller than quoted.
+#
+# So the guards want a recovery path first (a retry instruction, or an executor SLA short enough to
+# make a tight deadline safe), which is a product decision, not an encoding one. Costs nothing to
+# defer: the CONTRACT side already ships in this audit round, so adopting the overload here later
+# needs no re-audit. Revisit alongside the executor design.
 def encode_open(collateral: str, amount: int, tier: int) -> bytes:
     return selector("open(address,uint256,uint256)") + abi_encode(
         ["address", "uint256", "uint256"], [to_checksum_address(collateral), amount, tier]
