@@ -648,6 +648,52 @@ input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;bac
 const RPCS=["https://coston2-api.flare.network/ext/C/rpc","https://rpc.ankr.com/flare_coston2","https://coston2.enosys.global/ext/C/rpc"];
 const RPC=RPCS[0];
 const CHAIN_HEX="0x72", CHAIN_NAME="Flare Testnet Coston2";
+const CHAIN_DEC=parseInt(CHAIN_HEX,16);   // 114
+let WRONG_CHAIN=false;                    // set by verifyChain(); blocks every write
+// The wallet can sit on a different chain than the one we read from. Reads come from our own
+// Coston2 provider, so the whole UI stays populated and looks correct while the wallet is
+// elsewhere — and a write would then be signed against that other chain. Always ASK the wallet
+// what chain it is on; never infer it from a switch request having been sent.
+async function verifyChain(eip){
+  try{
+    const id=await eip.request({method:"eth_chainId"});
+    const ok=parseInt(id,16)===CHAIN_DEC;
+    setWrongChain(!ok, parseInt(id,16));
+    return ok;
+  }catch(_){ setWrongChain(true,null); return false; }
+}
+function setWrongChain(bad, sawId){
+  WRONG_CHAIN=!!bad;
+  const badge=document.querySelector(".net.net-test");
+  if(badge){
+    badge.innerHTML = bad
+      ? '<i></i> Wrong network'
+      : '<i></i> Coston2 Testnet';
+    badge.style.color = bad ? "var(--red)" : "";
+    badge.style.borderColor = bad ? "var(--red)" : "";
+    badge.title = bad && sawId ? ("Wallet is on chainId "+sawId+"; Lodestar is on "+CHAIN_DEC) : "";
+  }
+  const bb=$("borrowBtn"), lb=$("lendBtn");
+  if(bad){
+    if(bb){ bb.disabled=true; bb.textContent="Wrong network"; }
+    if(lb){ lb.disabled=true; lb.textContent="Wrong network"; }
+  }else if(account){
+    if(bb){ bb.disabled=false; bb.textContent="Borrow"; }
+    if(lb){ lb.disabled=false; lb.textContent="Supply USD\u20ae0"; }
+  }
+}
+// Offer the switch, then VERIFY. A user can decline the prompt (4001), which the old code
+// swallowed and carried on as if connected.
+async function ensureChain(eip){
+  if(await verifyChain(eip)) return true;
+  try{ await eip.request({method:"wallet_switchEthereumChain",params:[{chainId:CHAIN_HEX}]}); }
+  catch(e){
+    if(e && (e.code===4902 || (""+e).toLowerCase().includes("unrecognized"))){
+      try{ await eip.request({method:"wallet_addEthereumChain",params:[{chainId:CHAIN_HEX,chainName:CHAIN_NAME,nativeCurrency:{name:"Coston2 Flare",symbol:"C2FLR",decimals:18},rpcUrls:await addChainRpcs(),blockExplorerUrls:["https://coston2-explorer.flare.network"]}]}); }catch(_){}
+    }
+  }
+  return await verifyChain(eip);
+}
 const FTSO="0xC4e9c78EA53db782E28f28Fdf80BaF59336B304d";
 const ORACLE="0x05b960Cc798aBdB7c33B8D5bEF8f624bd4a3477A";
 const POOL="0xB19db963fB438e083E4C94588DD69CA455453472";
@@ -664,16 +710,20 @@ let EXT={};        // full loan data for the Extend panel, keyed by id (BigInts 
 const CDEC={FXRP:6,STXRP:6,SFLR:18};
 const FEED_XRP="0x015852502f55534400000000000000000000000000", FEED_FLR="0x01464c522f55534400000000000000000000000000";
 const FTSO_ABI=["function getFeedById(bytes21) view returns (uint256 value, int8 decimals, uint64 timestamp)"];
-const POOL_ABI=["function maxUtilizationBps() view returns (uint16)","function totalAssets() view returns (uint256)","function principalOut() view returns (uint256)","function totalSupply() view returns (uint256)","function balanceOf(address) view returns (uint256)"];
+const POOL_ABI=["error OverUtilized()","error InsufficientLiquidity()","function maxUtilizationBps() view returns (uint16)","function totalAssets() view returns (uint256)","function principalOut() view returns (uint256)","function totalSupply() view returns (uint256)","function balanceOf(address) view returns (uint256)"];
 // testnet seed lenders (fresh faucet wallets that supplied USD₮0); lender count = how many still hold shares
 const SEED_LP=["0xCF9071d193E73d3eFcFcA8a9ca4bF72d97545925","0x0368BdDfC65c95E7F6152987f88e5d017e3127Bf","0x53fEA31E7a0Be36D2A8d746eB55b67ea85678Ab2","0x60A2Cc5Fd6487E1BB826740aeD416FA4f93c7Ef1","0xA4b0aB8943ECE0B8cd6eE6Bd26366E9e02fC8987","0x8397dCe925c57bADb3fE48b9107f38C042D0EC34","0x9363210280909D31C138009688bE6566F0c1030b","0xb71e6a22884528F7eFE90388f8A3503716569D2A","0x17f0809f01e6aeb2F8f06Cc58c77Bfb9218e1F30","0xEF080024067C9b4A08DCeC24145A2F9f918d5570"];
 const ERC20_ABI=["function approve(address,uint256) returns (bool)","function allowance(address,address) view returns (uint256)","function balanceOf(address) view returns (uint256)"];
-const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function partialRepay(uint256,uint256,uint256,uint256,uint256)","function rollover(uint256,uint256)","function addCollateral(uint256,uint256)","function minPrincipal() view returns (uint128)","function feeReserveBps() view returns (uint16)","function gracePeriod() view returns (uint64)","function settleStartBps() view returns (uint16)","function settleFloorMinBps() view returns (uint16)","function settleDecayPeriod() view returns (uint32)","function paused() view returns (bool)","function activeLoanCount() view returns (uint256)","function maxActiveLoans() view returns (uint32)","function exposureUsd18(address) view returns (uint256)","function exposureCapUsd18(address) view returns (uint256)","function activeLoanIds(uint256) view returns (uint256)","function maxLoanLife() view returns (uint32)","function tierCount(address) view returns (uint256)","function tiers(address,uint256) view returns (uint16 ltvBps,uint32 duration,uint16 feeBps)","function tierDisabled(address,uint256) view returns (bool)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate,uint128 impairedLoss)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)",
+const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function partialRepay(uint256,uint256,uint256,uint256,uint256)","function rollover(uint256,uint256)","function addCollateral(uint256,uint256)","function minPrincipal() view returns (uint128)","function effectiveMinPrincipal() view returns (uint256)","function feeReserveBps() view returns (uint16)","function gracePeriod() view returns (uint64)","function settleStartBps() view returns (uint16)","function settleFloorMinBps() view returns (uint16)","function settleDecayPeriod() view returns (uint32)","function paused() view returns (bool)","function activeLoanCount() view returns (uint256)","function maxActiveLoans() view returns (uint32)","function exposureUsd18(address) view returns (uint256)","function exposureCapUsd18(address) view returns (uint256)","function activeLoanIds(uint256) view returns (uint256)","function maxLoanLife() view returns (uint32)","function tierCount(address) view returns (uint256)","function tiers(address,uint256) view returns (uint16 ltvBps,uint32 duration,uint16 feeBps)","function tierDisabled(address,uint256) view returns (bool)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate,uint128 impairedLoss)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)",
   // custom errors, so ethers decodes a revert to a name instead of a raw selector
   // (includes the oracle's errors: they bubble up through book calls like rollover's LTV re-check)
   "error BadParam()","error NotSupported()","error BadTier()","error CapExceeded()","error Paused()","error Undercollateralized()","error OracleDown()","error TooManyActiveLoans()","error NotActive()","error Defaulted()","error Slippage()","error Expired()","error NotBorrower()","error StalePrice()","error FeedNotSet()","error BadPrice()"];
 const ORACLE_ABI=["function usdValue18(address,uint256) view returns (uint256)","function priceUsd18(address) view returns (uint256)","function feeds(address) view returns (bytes21,address,uint8,uint64,uint16,bool)"];
-const POOLW_ABI=["function deposit(uint256,address) returns (uint256)","function redeem(uint256,address,address) returns (uint256)","function balanceOf(address) view returns (uint256)","function convertToAssets(uint256) view returns (uint256)"];
+const POOLW_ABI=["function deposit(uint256,address) returns (uint256)","function redeem(uint256,address,address) returns (uint256)","function balanceOf(address) view returns (uint256)","function convertToAssets(uint256) view returns (uint256)","function maxRedeem(address) view returns (uint256)","function maxWithdraw(address) view returns (uint256)","function previewRedeem(uint256) view returns (uint256)",
+  // custom errors, so a revert decodes to a NAME instead of "unknown custom error". These are
+  // not edge cases: the pool runs to an 80% utilization ceiling by design, so a lender exit
+  // larger than idle liquidity reverts InsufficientLiquidity as normal operation.
+  "error NotLoanBook()","error OverUtilized()","error InsufficientLiquidity()","error AlreadySet()","error BadParam()"];
 // ---- fast read layer: one Multicall3 call per refresh, with RPC failover + last-good cache ----
 const MC3="0xcA11bde05977b3631167028862bE2a173976CA11";
 const MC3_ABI=["function aggregate3((address target,bool allowFailure,bytes callData)[] calls) view returns ((bool success,bytes returnData)[] returnData)","function getCurrentBlockTimestamp() view returns (uint256)"];
@@ -855,7 +905,7 @@ function preview(){const m=MK[COLL],t=m.tiers[TIER],a=parseFloat($("amt").value)
   $("q-due").textContent=due.toLocaleDateString('en-US',{month:"short",day:"numeric",year:"numeric"});
   // Minimum-loan guard: a fractional amount can imply a principal below the on-chain minPrincipal,
   // which reverts. Warn up front (with the collateral needed) instead of a cryptic custom error.
-  const minP=STATS.minPrincipal||1;
+  const minP=STATS.effMinPrincipal||STATS.minPrincipal||1;   // quote the floor the contract enforces
   if(a>0 && m.price>0 && pr>0 && pr<minP){
     const minColl=Math.ceil((minP/(m.price*t.ltv/100))*100)/100;
     $("q-note").innerHTML=`<span style="color:var(--red)">This loan would be ${usd(pr)}, under the ${usd(minP)} minimum. Lock at least <b>${minColl.toLocaleString('en-US')} ${m.name}</b> to borrow.</span>`;
@@ -900,6 +950,10 @@ async function loadChain(){
     // Appended last on purpose: everything above is read by fixed index r[0..14], and the pxStart
     // offsets below are derived from base.length, so adding here shifts nothing.
     {t:BOOK,i:IBOOK,f:"maxActiveLoans"},
+    // v1.9+: the floor `open()` ACTUALLY enforces, which ramps with book fullness. Absent on the
+    // deployed v1.7 book, so this entry is allowed to fail and we fall back to the flat minimum.
+    // Appended last for the same reason as maxActiveLoans: r[0..15] are read by fixed index.
+    {t:BOOK,i:IBOOK,f:"effectiveMinPrincipal",allowFail:true},
   ];
   // Ask the oracle for the price of every collateral that exists on this network. This is the
   // exact number the contracts use for LTV, so the preview can never disagree with the borrow.
@@ -985,6 +1039,9 @@ async function loadChain(){
   // supply and withdraw all keep working, so only the borrow button needs to know.
   if(r[5]) STATS.activeLoans=Number(r[5][0]);
   if(r[15]) STATS.maxActiveLoans=Number(r[15][0]);
+  // The minimum the contract will actually accept right now. On v1.9+ this rises as the book
+  // fills; on older books the call fails and it equals the flat floor, i.e. the old behaviour.
+  STATS.effMinPrincipal = (r[16] && r[16][0]!==undefined) ? Number(r[16][0])/1e6 : STATS.minPrincipal;
   if(r[14]) setTx("l-ceil",(Number(r[14][0])/100)+"%");
   // Lender count: the explorer index (true holder count) is authoritative once it resolves; only fall
   // back to the seed-list heuristic before that, so the number never flickers back down on a refresh.
@@ -1070,6 +1127,7 @@ function disconnectWallet(){
   if($("pf-loans")) $("pf-loans").innerHTML=emptyHTML("Not connected","Connect a wallet to see your loans.");
   if($("pf-lend")) $("pf-lend").innerHTML=emptyHTML("Not connected","Connect a wallet to see your deposit.");
   if($("pf-sub")) $("pf-sub").textContent="connect a wallet to view";
+  setWrongChain(false,null);
 }
 // The wallet keeps whichever RPC it was handed when the network was first added, so hand it the one
 // that is answering right now rather than a static guess that may have died since.
@@ -1094,17 +1152,24 @@ async function connectWith(eip, eager){
   try{
     const accts = await eip.request({method: eager?"eth_accounts":"eth_requestAccounts"});
     if(!accts || !accts.length){ if(!eager) toast("No account available in this wallet.","err"); return; }
+    // Verify on BOTH paths. Eager reconnect used to skip this entirely, so every returning visitor
+    // had no network check at all.
     if(!eager){
-      try{ await eip.request({method:"wallet_switchEthereumChain",params:[{chainId:CHAIN_HEX}]}); }
-      catch(e){ if(e.code===4902||(""+e).toLowerCase().includes("unrecognized")){ try{ await eip.request({method:"wallet_addEthereumChain",params:[{chainId:CHAIN_HEX,chainName:CHAIN_NAME,nativeCurrency:{name:"Coston2 Flare",symbol:"C2FLR",decimals:18},rpcUrls:await addChainRpcs(),blockExplorerUrls:["https://coston2-explorer.flare.network"]}]}); }catch(_){}} }
+      const ok=await ensureChain(eip);
+      if(!ok){ toast("Wrong network. Switch your wallet to "+CHAIN_NAME+" (chainId "+CHAIN_DEC+") to continue.","err",12000); }
+    } else {
+      await verifyChain(eip);
     }
-    currentEip=eip;
+    currentEip=eip;   // needed by sendTx's pre-signature chain re-check
     bp=new ethers.BrowserProvider(eip); signer=await bp.getSigner(); account=await signer.getAddress();
     // hook events ONCE per provider, and never reload the page (that's what dropped the session)
     if(!eip._lodeHooked && eip.on){
       eip._lodeHooked=true;
       eip.on("accountsChanged",async(a)=>{ if(!a||!a.length){ disconnectWallet(); toast("Wallet disconnected."); } else { account=a[0]; bp=new ethers.BrowserProvider(eip); try{signer=await bp.getSigner();}catch(_){} onConnected(true); } });
-      eip.on("chainChanged",async()=>{ bp=new ethers.BrowserProvider(eip); try{signer=await bp.getSigner();}catch(_){} refreshAll(); });
+      eip.on("chainChanged",async()=>{ bp=new ethers.BrowserProvider(eip); try{signer=await bp.getSigner();}catch(_){}
+        const ok=await verifyChain(eip);
+        if(!ok) toast("Wallet switched to another network. Switch back to "+CHAIN_NAME+" to transact.","err",12000);
+        refreshAll(); });
     }
     onConnected(eager);
     checkWalletRpc(eip);
@@ -1178,10 +1243,25 @@ function renderProtection(){
     + `That is the whole credit risk, and it follows from two numbers you can check on chain: the tier LTV, and a settlement floor that never decays below ${floorPct}% of the FTSO price. `
     + `Both are read live from the contracts on this page, not written in by hand.`;
 }
+// friendlyErr returns null when the user simply declined in their wallet. Declining is a choice,
+// not a failure, and must not render as a red "X failed" toast -- it is the most common "error" in
+// any dapp. Every write path goes through here so the distinction is made in exactly one place.
+function toastErr(prefix,e){
+  const msg=friendlyErr(e);
+  if(msg===null){ toast("Transaction cancelled."); return; }
+  toast(prefix+": "+msg,"err");
+}
 function friendlyErr(e){
   // decode a named custom error (the ABI carries the error fragments) into plain English
-  const nm=e&&(e.revert&&e.revert.name||(e.info&&e.info.error&&e.info.error.data&&null));
-  if(nm){ const map={BadParam:"Amount is outside the allowed range — check the minimum loan size.",Paused:"Borrowing is paused right now.",CapExceeded:"This market has reached its cap.",Undercollateralized:"Not enough collateral at current prices. Top up collateral, then try again.",NotSupported:"This collateral isn't live yet.",OracleDown:"Price feed is briefly unavailable, try again shortly.",TooManyActiveLoans:"The book is at capacity, try again shortly.",NotActive:"This loan is no longer active.",Defaulted:"This loan has already defaulted.",Expired:"Too late to extend: the deadline has passed, or this extension would go past the 90-day maximum loan life.",NotBorrower:"Only the loan's borrower can extend it.",BadTier:"That term isn't available for this collateral.",StalePrice:"Price feed is briefly unavailable, try again shortly.",FeedNotSet:"Price feed is briefly unavailable, try again shortly.",BadPrice:"Price feed is briefly unavailable, try again shortly."}; if(map[nm]) return map[nm]; }
+    // Declining in the wallet is not a failure and must not render as a red error; it is the most
+  // common "error" in any dapp. Callers treat null as "say nothing".
+  if(e&&(e.code==="ACTION_REJECTED"||e.code===4001)) return null;
+  const m0=(errMsg(e)||"").toLowerCase();
+  if(m0.includes("insufficient funds")) return "You need C2FLR to pay gas. Get some from the <a href=\"https://faucet.flare.network/coston2\" target=\"_blank\" rel=\"noopener\">Coston2 faucet</a>, then try again.";
+  // `e.info.error.data` was ANDed with null here, which always discarded it — the exact gap that
+  // produced "unknown custom error" for every pool revert.
+  const nm=e&&(e.revert&&e.revert.name||null);
+  if(nm){ const map={BadParam:"Amount is outside the allowed range — check the minimum loan size.",Paused:"Borrowing is paused right now.",CapExceeded:"This market has reached its cap.",Undercollateralized:"Not enough collateral at current prices. Top up collateral, then try again.",NotSupported:"This collateral isn't live yet.",OracleDown:"Price feed is briefly unavailable, try again shortly.",TooManyActiveLoans:"The book is at capacity, try again shortly.",NotActive:"This loan is no longer active.",Defaulted:"This loan has already defaulted.",Expired:"Too late to extend: the deadline has passed, or this extension would go past the 90-day maximum loan life.",NotBorrower:"Only the loan's borrower can extend it.",BadTier:"That term isn't available for this collateral.",StalePrice:"Price feed is briefly unavailable, try again shortly.",FeedNotSet:"Price feed is briefly unavailable, try again shortly.",BadPrice:"Price feed is briefly unavailable, try again shortly.",InsufficientLiquidity:"Not enough idle liquidity in the pool right now. Funds are lent out and free up as loans repay — try a smaller amount, or again shortly.",OverUtilized:"That amount would push the pool past its utilization ceiling. A smaller amount will go through.",NotLoanBook:"Internal: that call must come from the loan book.",Slippage:"Price moved while the transaction was in flight. Try again.",AlreadySet:"That value has already been set."}; if(map[nm]) return map[nm]; }
   const m=(errMsg(e)||"").toLowerCase();
   if(m.includes("missing revert data")||m.includes("429")||m.includes("too many")||m.includes("failed to fetch")||m.includes("timeout")||m.includes("could not coalesce")||(e&&(e.code==="SERVER_ERROR"||e.code==="TIMEOUT"||e.code==="NETWORK_ERROR")))
     // name the endpoint that is answering right now — a hardcoded one is wrong on the day it goes down
@@ -1195,6 +1275,12 @@ function friendlyErr(e){
 // on the endpoint we probed live and send that padded limit, so a healthy tx is not blocked behind the
 // wallet's "may fail" warning. Only if BOTH fail do we send unpadded and let the real error surface.
 async function sendTx(c,fn,...args){
+  // Last line of defence: every write funnels through here, so re-check the chain immediately before
+  // signing rather than trusting a check made at connect time. A user can switch networks mid-session.
+  if(currentEip){
+    const ok=await verifyChain(currentEip);
+    if(!ok) throw Object.assign(new Error("Wrong network — switch your wallet to "+CHAIN_NAME+" (chainId "+CHAIN_DEC+")"),{code:"WRONG_CHAIN"});
+  }
   const ov={};
   try{ const g=await c[fn].estimateGas(...args); ov.gasLimit=g*140n/100n+50000n; }
   catch(_){
@@ -1224,7 +1310,7 @@ window.doBorrow=async()=>{
   if(amt<=0n){ toast("Enter a collateral amount."); return; }
   // pre-check the on-chain minimum so a too-small loan gives a clear message, not a raw revert
   {
-    const t=m.tiers[TIER], pr=(Number(amt)/1e6)*m.price*t.ltv/100, minP=STATS.minPrincipal||1;
+    const t=m.tiers[TIER], pr=(Number(amt)/1e6)*m.price*t.ltv/100, minP=STATS.effMinPrincipal||STATS.minPrincipal||1;
     if(m.price>0 && pr>0 && pr<minP){
       const minColl=Math.ceil((minP/(m.price*t.ltv/100))*100)/100;
       toast(`That borrow would be ${usd(pr)}, under the ${usd(minP)} minimum. Lock at least ${minColl.toLocaleString('en-US')} ${m.name}.`,"err"); return;
@@ -1249,7 +1335,7 @@ window.doBorrow=async()=>{
     if(await tok.allowance(account,BOOK)<amt){ busy(btn,"Approving FXRP…"); await (await tok.approve(BOOK,amt)).wait(); }
     busy(btn,"Borrowing…"); await (await sendTx(book,"open",FXRP_ADDR,amt,BigInt(TIER))).wait();
     unbusy(btn,"Borrow"); toast("Borrow complete. USD₮0 is in your wallet.","ok"); refreshAll();
-  }catch(e){ unbusy(btn,"Borrow"); console.error(e); toast("Borrow failed: "+friendlyErr(e),"err"); }
+  }catch(e){ unbusy(btn,"Borrow"); console.error(e); toastErr("Borrow failed",e); }
 };
 window.doDeposit=async()=>{
   if(!account) return openWalletPicker();
@@ -1261,7 +1347,7 @@ window.doDeposit=async()=>{
     if(await tok.allowance(account,POOL)<amt){ busy(btn,"Approving USD₮0…"); await (await tok.approve(POOL,amt)).wait(); }
     busy(btn,"Supplying…"); await (await sendTx(pool,"deposit",amt,account)).wait();
     unbusy(btn,"Supply USD₮0"); toast("Deposit complete. You're now earning.","ok"); refreshAll();
-  }catch(e){ unbusy(btn,"Supply USD₮0"); console.error(e); toast("Deposit failed: "+friendlyErr(e),"err"); }
+  }catch(e){ unbusy(btn,"Supply USD₮0"); console.error(e); toastErr("Deposit failed",e); }
 };
 window.doRepay=async(id,due)=>{
   if(!account) return openWalletPicker();
@@ -1271,7 +1357,7 @@ window.doRepay=async(id,due)=>{
     if(await tok.allowance(account,POOL)<need){ toast("Approve USD₮0…"); await (await tok.approve(POOL,need)).wait(); }
     toast("Repaying…"); await (await sendTx(book,"repay",BigInt(id))).wait();
     toast("Repaid. Your collateral is back in your wallet.","ok"); refreshAll();
-  }catch(e){ console.error(e); toast("Repay failed: "+friendlyErr(e),"err"); }
+  }catch(e){ console.error(e); toastErr("Repay failed",e); }
 };
 window.togglePartial=(id)=>{ const p=vEl("prp-"+id); if(!p) return; const open=p.style.display!=="none"; const x=vEl("exp-"+id); if(x) x.style.display="none"; p.style.display=open?"none":"flex"; if(!open){ const i=vEl("pr-"+id); if(i) i.focus(); } };
 window.doPartial=async(id,principalStr)=>{
@@ -1282,13 +1368,14 @@ window.doPartial=async(id,principalStr)=>{
   if(amt>=principal){ toast("That covers the whole loan — use Repay to close it.","err"); return; }
   try{
     const tok=C(USDT0_ADDR,ERC20_ABI), book=C(BOOK,BOOK_ABI);
-    const minP=await book.minPrincipal();
+    // Read the enforced floor, falling back for books that predate it.
+    let minP; try{ minP=await book.effectiveMinPrincipal(); }catch(_){ minP=await book.minPrincipal(); }
     if(principal-amt<minP){ toast("Leave at least "+usd(Number(minP)/1e6)+" owed, or use Repay to close the loan.","err"); return; }
     if(await tok.balanceOf(account)<amt){ toast("You need "+usd(v)+" USD₮0 for this pay-down.","err"); return; }
     if(await tok.allowance(account,POOL)<amt){ toast("Approve USD₮0…"); await (await tok.approve(POOL,amt)).wait(); }
     toast("Paying down…"); await (await sendTx(book,"partialRepay",BigInt(id),amt,0n,0n,0n)).wait();
     toast("Paid down. Your debt is lower and your collateral stays locked until you repay in full.","ok"); refreshAll();
-  }catch(e){ console.error(e); toast("Pay-down failed: "+friendlyErr(e),"err"); }
+  }catch(e){ console.error(e); toastErr("Pay-down failed",e); }
 };
 // ---- Extend (rollover): pay another term's fee, keep the borrowed USD₮0, push the deadline out ----
 const fmtDate=ts=>new Date(ts*1000).toLocaleDateString('en-US',{month:"short",day:"numeric",year:"numeric"});
@@ -1352,7 +1439,7 @@ window.renderExtend=async(id)=>{
     let topH="";
     if(anyLtv) topH=`<div class="exopt" style="border-style:dashed"><span>Add collateral to this loan. It stays locked with the rest and comes back when you repay.</span><div class="inp" style="max-width:170px;padding:6px 10px;margin:0"><input id="ext-${id}" type="number" min="0" value="${minTop||""}"/><span class="u">${L.sym}</span></div><button class="btn btn-ln btn-sm" onclick="doTopUp('${id}')">Add</button></div>`;
     b.innerHTML=`<div>Extending pays another term's fee in USD₮0 from your wallet. The USD₮0 you borrowed stays yours and your collateral stays locked. The position must still meet the term's LTV at current prices.</div>${rowsH}${topH}`;
-  }catch(e){ console.error("extend",e); b.textContent="Couldn't load terms. "+friendlyErr(e); }
+  }catch(e){ console.error("extend",e); b.textContent="Couldn't load terms. "+(friendlyErr(e)||"Cancelled."); }
 };
 window.doExtend=async(id,tier,feeStr,newDue)=>{
   if(!account) return openWalletPicker();
@@ -1364,7 +1451,7 @@ window.doExtend=async(id,tier,feeStr,newDue)=>{
     }
     toast("Extending…"); await (await sendTx(book,"rollover",BigInt(id),BigInt(tier))).wait();
     toast("Deadline extended to "+fmtDate(newDue)+". Same loan, new clock.","ok"); refreshAll();
-  }catch(e){ console.error(e); toast("Extend failed: "+friendlyErr(e),"err"); }
+  }catch(e){ console.error(e); toastErr("Extend failed",e); }
 };
 window.doTopUp=async(id)=>{
   if(!account) return openWalletPicker();
@@ -1382,12 +1469,12 @@ window.doTopUp=async(id)=>{
     // keep the live "worth $X now" row truthful without a full loadPositions (which would close this panel)
     const pl=PORT_LOANS.find(x=>String(x.id)===String(id)); if(pl) pl.amt=Number(L.collAmount)/10**(CDEC[L.sym]||6);
     toast("Collateral added.","ok"); renderExtend(id); loadChain(); fetchBalances();
-  }catch(e){ console.error(e); toast("Top-up failed: "+friendlyErr(e),"err"); }
+  }catch(e){ console.error(e); toastErr("Top-up failed",e); }
 };
 window.doWithdraw=async()=>{
   if(!account) return;
   try{ const pool=C(POOL,POOLW_ABI); const sh=await pool.balanceOf(account); toast("Withdrawing…"); await (await sendTx(pool,"redeem",sh,account,account)).wait(); toast("Withdrawn to your wallet.","ok"); refreshAll(); }
-  catch(e){ console.error(e); toast("Withdraw failed: "+friendlyErr(e),"err"); }
+  catch(e){ console.error(e); toastErr("Withdraw failed",e); }
 };
 const emptyHTML=(t,s)=>`<div class="empty" style="padding:28px"><b>${t}</b>${s}</div>`;
 async function loadPositions(){
