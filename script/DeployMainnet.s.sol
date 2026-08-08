@@ -67,20 +67,21 @@ contract DeployMainnet is Script {
     uint16 constant STXRP_HAIRCUT = 600; // 6% on stXRP: newer Firelight vault -> extra conservatism
     uint16 constant RATE_CLAMP_BPS_PER_DAY = 20; // LST valuation-rate growth allowance (see setRateClamp)
     uint128 constant MIN_PRINCIPAL = 100e6; // $100 floor: prices out slot-exhaustion of maxActiveLoans
-    // SLOT-EXHAUSTION RAMP: the minimum loan rises quadratically with book fullness, so occupying
-    // every one of the 400 slots costs the integral under the ramp rather than a flat
-    // MIN_PRINCIPAL * 400. 90_000 = 9x at a completely full book ($100 -> $1,000 for the last slot)
-    // and is negligible below ~25% full ($114 at 50/400), so ordinary borrowing never sees it.
-    // This guards the one capacity attack that CANNOT be undone reactively: maxActiveLoans is
-    // hard-bounded to 400 in the contract and squatted loans persist to maturity (up to 30 days),
-    // whereas exposure-cap exhaustion is cleared by a single setExposureCap call. 0 disables it.
-    uint32 constant SLOT_PREMIUM_BPS = 90_000;
     // The constructor defaults maxActiveLoans to 300 and this script never set it, so mainnet would
     // have shipped at 300 while the slot-premium reasoning, its comments and the audit note all
     // assume 400. Set it explicitly. 400 is the contract's hard ceiling; the exit-sweep measurement
     // in test/SweepGasCeiling.t.sol is what justifies it (~9.9M gas in a mass crash, 35% of a 28M
     // block), so this is the largest value that measurement supports.
     uint32 constant MAX_ACTIVE_LOANS = 400;
+    // Headline risk numbers. Equal to the contract's constructor defaults today; pinned so the
+    // launch configuration is an explicit, reviewable artifact rather than an inherited default.
+    uint64 constant GRACE_PERIOD = 48 hours;
+    uint16 constant KEEPER_BPS = 500; // 5% of collateral to the settling keeper (settleSwap only)
+    uint16 constant PENALTY_BPS = 500; // 5% of principal to the reserve on default
+    uint16 constant FEE_RESERVE_BPS = 2000; // 20% of each fee to the reserve, 80% to lenders
+    uint16 constant SETTLE_START_BPS = 10_000; // Dutch floor at the moment of default: 100%
+    uint16 constant SETTLE_FLOOR_MIN_BPS = 8_500; // ...decaying to 85%
+    uint32 constant SETTLE_DECAY_PERIOD = 24 hours; // ...over 24 hours
     uint256 constant SEED_MIN = 10e6; // $10 minimum first-deposit seed; deploy reverts if unseeded
     // GUARDED LAUNCH: tiny per-collateral borrow cap bounds the MAX possible loss from any tail risk
     // (incl. the sFLR rate provider being upgradeable by a single external EOA) to the cap size — a
@@ -133,8 +134,28 @@ contract DeployMainnet is Script {
         pool.setLoanBook(address(book));
 
         book.setMinPrincipal(MIN_PRINCIPAL);
-        book.setSlotPremiumBps(SLOT_PREMIUM_BPS); // explicit at launch, not left to the constructor default
-        book.setMaxActiveLoans(MAX_ACTIVE_LOANS); // ditto: the default is 300, not the 400 we reason about
+        book.setMaxActiveLoans(MAX_ACTIVE_LOANS); // the constructor default is 300, not the 400 we reason about
+
+        // ---- headline risk numbers, set EXPLICITLY ----
+        // These match the current constructor defaults. They are pinned here anyway because they are
+        // PUBLISHED (docs, dapp, audit scope) and must not depend on a default in src/ staying put:
+        // a future edit there would otherwise ship a protocol that differs from the documented one
+        // with nothing in the deploy path to catch it. A drift now shows up as a diff in this file.
+        //   grace 48h        — a borrower who is late but solvent has two days to repay before default
+        //   keeper 5%        — of collateral, to whoever settles via DEX (settleSwap only)
+        //   penalty 5%       — of principal, to the first-loss reserve on default
+        //   feeReserve 20%   — of every origination fee to the reserve; the other 80% is lender yield
+        book.setRiskParams(GRACE_PERIOD, KEEPER_BPS, PENALTY_BPS, FEE_RESERVE_BPS);
+        //   Dutch settlement floor: 100% of oracle value at default, decaying to 85% over 24h.
+        book.setSettleCurve(SETTLE_START_BPS, SETTLE_FLOOR_MIN_BPS, SETTLE_DECAY_PERIOD);
+
+        // ---- launch PAUSED ----
+        // Blocks NEW borrows only: repay, rollover, settle, and every pool deposit/withdrawal stay
+        // open, so this can never trap a user. Without it the book is live for borrowing from the
+        // moment it is deployed -- against wiring that has not yet been verified on-chain, by an
+        // owner that is still a single hot deploy key. Unpausing is the multisig's first act, after
+        // the verification this script's header already requires.
+        book.setPaused(true);
 
         // ---- tiers + exposure caps ----
         // TIERS ARE APPEND-ONLY AND IMMUTABLE: addTier can never be edited or removed, and a
@@ -190,6 +211,7 @@ contract DeployMainnet is Script {
         console.log("LodestarPool    ", address(pool));
         console.log("LodestarLoanBook", address(book));
         console.log("Pool seeded USDT0", bal);
+        console.log("Pool seeded, book PAUSED (borrowing disabled until the multisig unpauses).");
         console.log("Owner is still the deployer. Verify on-chain, then run TransferOwnership.s.sol.");
     }
 }

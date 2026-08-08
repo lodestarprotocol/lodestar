@@ -724,7 +724,7 @@ const POOL_ABI=["error OverUtilized()","error InsufficientLiquidity()","function
 // testnet seed lenders (fresh faucet wallets that supplied USD₮0); lender count = how many still hold shares
 const SEED_LP=["0xCF9071d193E73d3eFcFcA8a9ca4bF72d97545925","0x0368BdDfC65c95E7F6152987f88e5d017e3127Bf","0x53fEA31E7a0Be36D2A8d746eB55b67ea85678Ab2","0x60A2Cc5Fd6487E1BB826740aeD416FA4f93c7Ef1","0xA4b0aB8943ECE0B8cd6eE6Bd26366E9e02fC8987","0x8397dCe925c57bADb3fE48b9107f38C042D0EC34","0x9363210280909D31C138009688bE6566F0c1030b","0xb71e6a22884528F7eFE90388f8A3503716569D2A","0x17f0809f01e6aeb2F8f06Cc58c77Bfb9218e1F30","0xEF080024067C9b4A08DCeC24145A2F9f918d5570"];
 const ERC20_ABI=["function approve(address,uint256) returns (bool)","function allowance(address,address) view returns (uint256)","function balanceOf(address) view returns (uint256)"];
-const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function repay(uint256)","function partialRepay(uint256,uint256,uint256,uint256,uint256)","function rollover(uint256,uint256)","function addCollateral(uint256,uint256)","function minPrincipal() view returns (uint128)","function effectiveMinPrincipal() view returns (uint256)","function feeReserveBps() view returns (uint16)","function gracePeriod() view returns (uint64)","function settleStartBps() view returns (uint16)","function settleFloorMinBps() view returns (uint16)","function settleDecayPeriod() view returns (uint32)","function paused() view returns (bool)","function activeLoanCount() view returns (uint256)","function maxActiveLoans() view returns (uint32)","function exposureUsd18(address) view returns (uint256)","function exposureCapUsd18(address) view returns (uint256)","function activeLoanIds(uint256) view returns (uint256)","function maxLoanLife() view returns (uint32)","function tierCount(address) view returns (uint256)","function tiers(address,uint256) view returns (uint16 ltvBps,uint32 duration,uint16 feeBps)","function tierDisabled(address,uint256) view returns (bool)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate,uint128 impairedLoss)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)",
+const BOOK_ABI=["function open(address,uint256,uint256) returns (uint256)","function open(address,uint256,uint256,uint256,uint256) returns (uint256)","function repay(uint256)","function partialRepay(uint256,uint256,uint256,uint256,uint256)","function rollover(uint256,uint256)","function addCollateral(uint256,uint256)","function minPrincipal() view returns (uint128)","function feeReserveBps() view returns (uint16)","function gracePeriod() view returns (uint64)","function settleStartBps() view returns (uint16)","function settleFloorMinBps() view returns (uint16)","function settleDecayPeriod() view returns (uint32)","function paused() view returns (bool)","function activeLoanCount() view returns (uint256)","function maxActiveLoans() view returns (uint32)","function exposureUsd18(address) view returns (uint256)","function exposureCapUsd18(address) view returns (uint256)","function activeLoanIds(uint256) view returns (uint256)","function maxLoanLife() view returns (uint32)","function tierCount(address) view returns (uint256)","function tiers(address,uint256) view returns (uint16 ltvBps,uint32 duration,uint16 feeBps)","function tierDisabled(address,uint256) view returns (bool)","function loans(uint256) view returns (address borrower,address collateral,uint256 collAmount,uint128 principal,uint128 fee,uint128 principalUsd18,uint64 openedAt,uint64 dueAt,bool active,uint128 openRate,uint128 impairedLoss)","event LoanOpened(uint256 indexed id,address indexed borrower,address indexed collateral,uint256 collAmount,uint256 principal,uint256 fee,uint64 dueAt)",
   // custom errors, so ethers decodes a revert to a name instead of a raw selector
   // (includes the oracle's errors: they bubble up through book calls like rollover's LTV re-check)
   "error BadParam()","error NotSupported()","error BadTier()","error CapExceeded()","error Paused()","error Undercollateralized()","error OracleDown()","error TooManyActiveLoans()","error NotActive()","error Defaulted()","error Slippage()","error Expired()","error NotBorrower()","error StalePrice()","error FeedNotSet()","error BadPrice()"];
@@ -915,7 +915,7 @@ function preview(){const m=MK[COLL],t=m.tiers[TIER],a=parseFloat($("amt").value)
   $("q-due").textContent=due.toLocaleDateString('en-US',{month:"short",day:"numeric",year:"numeric"});
   // Minimum-loan guard: a fractional amount can imply a principal below the on-chain minPrincipal,
   // which reverts. Warn up front (with the collateral needed) instead of a cryptic custom error.
-  const minP=STATS.effMinPrincipal||STATS.minPrincipal||1;   // quote the floor the contract enforces
+  const minP=STATS.minPrincipal||1;   // the flat floor the contract enforces
   if(a>0 && m.price>0 && pr>0 && pr<minP){
     const minColl=Math.ceil((minP/(m.price*t.ltv/100))*100)/100;
     $("q-note").innerHTML=`<span style="color:var(--red)">This loan would be ${usd(pr)}, under the ${usd(minP)} minimum. Lock at least <b>${minColl.toLocaleString('en-US')} ${m.name}</b> to borrow.</span>`;
@@ -960,12 +960,6 @@ async function loadChain(){
     // Appended last on purpose: everything above is read by fixed index r[0..14], and the pxStart
     // offsets below are derived from base.length, so adding here shifts nothing.
     {t:BOOK,i:IBOOK,f:"maxActiveLoans"},
-    // v1.9+: the floor `open()` ACTUALLY enforces, which ramps with book fullness. Absent on the
-    // deployed v1.7 book, so this entry is allowed to fail and we fall back to the flat minimum.
-    // Appended last for the same reason as maxActiveLoans: r[0..15] are read by fixed index.
-    // mcOn already sets allowFailure=true for EVERY call, so a missing function on the
-    // deployed v1.7 book fails alone and the fallback below fires. No per-call key exists.
-    {t:BOOK,i:IBOOK,f:"effectiveMinPrincipal"},
   ];
   // Ask the oracle for the price of every collateral that exists on this network. This is the
   // exact number the contracts use for LTV, so the preview can never disagree with the borrow.
@@ -1053,7 +1047,6 @@ async function loadChain(){
   if(r[15]) STATS.maxActiveLoans=Number(r[15][0]);
   // The minimum the contract will actually accept right now. On v1.9+ this rises as the book
   // fills; on older books the call fails and it equals the flat floor, i.e. the old behaviour.
-  STATS.effMinPrincipal = (r[16] && r[16][0]!==undefined) ? Number(r[16][0])/1e6 : STATS.minPrincipal;
   if(r[14]) setTx("l-ceil",(Number(r[14][0])/100)+"%");
   // Lender count: the explorer index (true holder count) is authoritative once it resolves; only fall
   // back to the seed-list heuristic before that, so the number never flickers back down on a refresh.
@@ -1283,7 +1276,7 @@ function friendlyErr(e){
   // `e.info.error.data` was ANDed with null here, which always discarded it — the exact gap that
   // produced "unknown custom error" for every pool revert.
   const nm=e&&(e.revert&&e.revert.name||null);
-  if(nm){ const map={BadParam:"Amount is outside the allowed range — check the minimum loan size.",Paused:"Borrowing is paused right now.",CapExceeded:"This market has reached its cap.",Undercollateralized:"Not enough collateral at current prices. Top up collateral, then try again.",NotSupported:"This collateral isn't live yet.",OracleDown:"Price feed is briefly unavailable, try again shortly.",TooManyActiveLoans:"The book is at capacity, try again shortly.",NotActive:"This loan is no longer active.",Defaulted:"This loan has already defaulted.",Expired:"Too late to extend: the deadline has passed, or this extension would go past the 90-day maximum loan life.",NotBorrower:"Only the loan's borrower can extend it.",BadTier:"That term isn't available for this collateral.",StalePrice:"Price feed is briefly unavailable, try again shortly.",FeedNotSet:"Price feed is briefly unavailable, try again shortly.",BadPrice:"Price feed is briefly unavailable, try again shortly.",InsufficientLiquidity:"Not enough idle liquidity in the pool right now. Funds are lent out and free up as loans repay — try a smaller amount, or again shortly.",OverUtilized:"That amount would push the pool past its utilization ceiling. A smaller amount will go through.",NotLoanBook:"Internal: that call must come from the loan book.",Slippage:"Price moved while the transaction was in flight. Try again.",AlreadySet:"That value has already been set."}; if(map[nm]) return map[nm]; }
+  if(nm){ const map={BadParam:"Amount is outside the allowed range — check the minimum loan size.",Paused:"Borrowing is paused right now.",CapExceeded:"This market has reached its cap.",Undercollateralized:"Not enough collateral at current prices. Top up collateral, then try again.",NotSupported:"This collateral isn't live yet.",OracleDown:"Price feed is briefly unavailable, try again shortly.",TooManyActiveLoans:"The book is at capacity, try again shortly.",NotActive:"This loan is no longer active.",Defaulted:"This loan has already defaulted.",Expired:"This transaction sat too long and the price it was quoted at is stale. Nothing was charged — please try again. (On an extension, it can also mean the new term would go past the 90-day maximum loan life.)",NotBorrower:"Only the loan's borrower can extend it.",BadTier:"That term isn't available for this collateral.",StalePrice:"Price feed is briefly unavailable, try again shortly.",FeedNotSet:"Price feed is briefly unavailable, try again shortly.",BadPrice:"Price feed is briefly unavailable, try again shortly.",InsufficientLiquidity:"Not enough idle liquidity in the pool right now. Funds are lent out and free up as loans repay — try a smaller amount, or again shortly.",OverUtilized:"That amount would push the pool past its utilization ceiling. A smaller amount will go through.",NotLoanBook:"Internal: that call must come from the loan book.",Slippage:"The price moved more than 1% between your quote and the transaction landing, so the borrow was refused rather than filled smaller than quoted. Nothing was charged — try again.",AlreadySet:"That value has already been set."}; if(map[nm]) return map[nm]; }
   // Below the decode on purpose: a named revert is ground truth and must beat a substring match.
   // "insufficient funds" is the most generic phrase in EVM tooling.
   if(e&&(e.code==="INSUFFICIENT_FUNDS")||/insufficient funds for/i.test(errMsg(e)||""))
@@ -1300,6 +1293,21 @@ function friendlyErr(e){
 // If the wallet's own endpoint cannot estimate (down or rate-limited) but the chain is fine, estimate
 // on the endpoint we probed live and send that padded limit, so a healthy tx is not blocked behind the
 // wallet's "may fail" warning. Only if BOTH fail do we send unpadded and let the real error surface.
+// Does the deployed book have `open(address,uint256,uint256,uint256,uint256)`? The live Coston2
+// book is v1.7 and does not; mainnet will. Probed ONCE from the deployed bytecode rather than by
+// trying the call, because a failed trial cannot be told apart from a genuinely reverting borrow.
+// Sound only because the core is immutable and unproxied — there is no delegatecall, so a selector
+// absent from this code is a function that does not exist. REVISIT IF A PROXY IS EVER INTRODUCED.
+let _guardedOpen=null;   // null = not probed yet, true/false = answer
+const OPEN5_SELECTOR="78745e1c";                 // open(address,uint256,uint256,uint256,uint256)
+async function bookHasGuardedOpen(){
+  if(_guardedOpen!==null) return _guardedOpen;
+  try{
+    const code=await readProvider().getCode(BOOK);
+    _guardedOpen = typeof code==="string" && code.toLowerCase().includes(OPEN5_SELECTOR);
+  }catch(_){ _guardedOpen=false; }   // fail safe: unguarded borrow beats no borrow
+  return _guardedOpen;
+}
 async function sendTx(c,fn,...args){
   // Last line of defence: every write funnels through here, so re-check the chain immediately before
   // signing rather than trusting a check made at connect time. A user can switch networks mid-session.
@@ -1346,7 +1354,7 @@ window.doBorrow=async()=>{
   if(amt<=0n){ toast("Enter a collateral amount."); return; }
   // pre-check the on-chain minimum so a too-small loan gives a clear message, not a raw revert
   {
-    const t=m.tiers[TIER], pr=(Number(amt)/1e6)*m.price*t.ltv/100, minP=STATS.effMinPrincipal||STATS.minPrincipal||1;
+    const t=m.tiers[TIER], pr=(Number(amt)/1e6)*m.price*t.ltv/100, minP=STATS.minPrincipal||1;
     if(m.price>0 && pr>0 && pr<minP){
       const minColl=Math.ceil((minP/(m.price*t.ltv/100))*100)/100;
       toast(`That borrow would be ${usd(pr)}, under the ${usd(minP)} minimum. Lock at least ${minColl.toLocaleString('en-US')} ${m.name}.`,"err"); return;
@@ -1369,7 +1377,26 @@ window.doBorrow=async()=>{
     const tok=C(FXRP_ADDR,ERC20_ABI), book=C(BOOK,BOOK_ABI);
     if(await tok.balanceOf(account)<amt){ toast('Not enough FXRP. Get test tokens from the <a href="https://faucet.flare.network/" target="_blank">Flare faucet</a>.',"err"); return; }
     if(await tok.allowance(account,BOOK)<amt){ busy(btn,"Approving FXRP…"); await (await tok.approve(BOOK,amt)).wait(); }
-    busy(btn,"Borrowing…"); await (await sendTx(book,"open",FXRP_ADDR,amt,BigInt(TIER))).wait();
+    // Send the terms the user is looking at, not just the request. `minOut` is the "You receive"
+    // figure from the quote panel less 1%, and the borrow is refused rather than executed if the
+    // FTSO price moves further than that between signing and inclusion; `deadline` refuses a
+    // transaction that sits in the mempool past 5 minutes instead of executing it at a stale quote.
+    // Both fall back to 0 (the contract reads 0 as "unconstrained") if the price read failed, so a
+    // degraded read can never block a valid borrow -- same rule as the cap and book-full checks.
+    let minOut=0n, deadline=0n;
+    {
+      const t=m.tiers[TIER], pr=(Number(amt)/1e6)*m.price*t.ltv/100, recv=pr*(1-t.fee/100);
+      if(m.price>0 && recv>0){
+        minOut=BigInt(Math.floor(recv*0.99*1e6));     // 1% tolerance on the quoted disbursement
+        deadline=BigInt(Math.floor(Date.now()/1000)+300);
+      }
+    }
+    busy(btn,"Borrowing…");
+    // Guarded form where the book supports it, original form where it does not. Both produce an
+    // identical loan when minOut/deadline are 0, so this is purely about which selector exists.
+    await (await (await bookHasGuardedOpen()
+      ? sendTx(book,"open(address,uint256,uint256,uint256,uint256)",FXRP_ADDR,amt,BigInt(TIER),minOut,deadline)
+      : sendTx(book,"open(address,uint256,uint256)",FXRP_ADDR,amt,BigInt(TIER)))).wait();
     unbusy(btn,"Borrow"); toast("Borrow complete. USD₮0 is in your wallet.","ok"); refreshAll();
   }catch(e){ unbusy(btn,"Borrow"); console.error(e); toastErr("Borrow failed",e); }
 };
@@ -1407,10 +1434,8 @@ window.doPartial=async(id,principalStr)=>{
   if(amt>=principal){ toast("That covers the whole loan — use Repay to close it.","err"); return; }
   try{
     const tok=C(USDT0_ADDR,ERC20_ABI), book=C(BOOK,BOOK_ABI);
-    // FLAT floor on purpose. This call passes collateralOut = 0, and the contract uses
-    //   floorNow = collateralOut > 0 ? effectiveMinPrincipal() : minPrincipal
-    // precisely so a borrower de-risking is never blocked because strangers filled the book.
-    // Reading the ramped floor here would re-impose that trap in the client.
+    // The contract gates a pay-down on the flat `minPrincipal`, in both directions: shrinking a
+    // loan consumes no slot, so it must never be blocked by how full the book is.
     const minP=await book.minPrincipal();
     if(principal-amt<minP){ toast("Leave at least "+usd(Number(minP)/1e6)+" owed, or use Repay to close the loan.","err"); return; }
     if(await tok.balanceOf(account)<amt){ toast("You need "+usd(v)+" USD₮0 for this pay-down.","err"); return; }
