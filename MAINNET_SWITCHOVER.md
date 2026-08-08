@@ -3,7 +3,7 @@
 What must change in `web/index.html` when the protocol goes live on Flare mainnet.
 Everything here is testnet-specific and will silently misbehave if left as is.
 
-Verified against the file on 2026-07-27. Line numbers drift, so grep the strings.
+Verified against the file on 2026-08-08. Line numbers drift, so grep the strings.
 
 > **`web/` is the Cloudflare Pages output directory. Every file in it is served publicly at
 > lodestarprotocol.xyz, including anything that is not linked from the page.** This checklist and the
@@ -43,25 +43,59 @@ zero `Refused to connect` lines, not merely that the page rendered.
 
 ## 2. Contracts and tokens
 
+Every address in this section is immutable once users are transacting against it. Check each
+against `src/flare/FlareAddresses.sol`, which is the single source of truth the deploy script and
+the fork tests both use — do not retype them from here.
+
 - `ORACLE`, `POOL`, `BOOK` → the mainnet deploy addresses (from the DeployMainnet broadcast).
 - `FXRP_ADDR` → `0xAd552A648C74D49E10027AB8a618A3ad4901c5bE`.
+- **`USDT0_ADDR` → `0xe7cd86e13AC4309349F30B3435a9d337750fC82D`.** Currently the Coston2 USD₮0.
+  Missed by every earlier version of this checklist. Leave it and the Supply form, the wallet
+  balance and every repay/extend approval point at a token that does not exist on mainnet — the
+  user is asked to approve an address with no code, and their real USD₮0 balance shows as zero.
+- **`FTSO` → `0x7BDE3Df0624114eDB3A67dFe6753e62f4e7c1d20`.** Currently the Coston2 FtsoV2. Also
+  missed by earlier versions. Prices are read from `LodestarOracle` for anything with an address
+  (see §4), so this is the fallback path rather than the main one, but it is still wrong.
 - **`MK.STXRP.addr` and `MK.SFLR.addr` are empty strings.** Fill them with the mainnet
   token addresses (stXRP `0x4c18ff3c89632c3dd62e796c0afa5c07c4c1b2b3`,
   sFLR `0x12e605bc104e93B45e1aD99F9e555f659051c2BB`). Until they are filled, those two
   markets fall back to the local `rate`/`hc` estimate instead of the oracle, which is
   exactly the drift this design removes. This is the single most important line here.
-- `ADDR2MK` maps only FXRP. Add stXRP and sFLR or loan rows will mislabel collateral.
-- `CDEC` already carries `SFLR:18`; confirm against the deployed token before launch.
+- `CDEC` already carries `SFLR:18`; confirm against the deployed token before launch. This is now
+  load-bearing for correctness, not just display — see below.
 - Drop `soon:true` from STXRP/SFLR once their tiers exist on chain, and set `live:true`.
+- **No longer a manual step:** `ADDR2MK` is derived from `MK[k].addr` by `buildAddr2Mk()`. Filling
+  the address above is sufficient; loan rows can no longer mislabel collateral because someone
+  forgot a second list.
+
+> **This section used to be actively dangerous.** Before 2026-08-08 the borrow path hardcoded FXRP:
+> it approved `FXRP_ADDR`, opened with `FXRP_ADDR` as collateral, and parsed the input amount at a
+> fixed `1e6`. Setting `live:true` on sFLR (18dp) as instructed above would therefore have asked an
+> sFLR borrower to approve **FXRP**, and — if they happened to hold FXRP — opened a loan against
+> **FXRP collateral** for **10^12 times** the amount they typed, while the form, the quote and the
+> LTV all described sFLR. Nothing reverts on that path; it produces a valid loan of the wrong asset
+> in the wrong size.
+>
+> The dapp now drives the whole borrow path off `MK[COLL]` and `CDEC` (`uColl`/`collNum`/`fillAmt`),
+> and refuses outright to transact against a collateral whose `addr` is still empty, so a
+> half-finished switchover fails loudly instead of signing to nowhere. Verified for both 6dp and
+> 18dp, including that `0.123456789012345678` sFLR survives parsing exactly.
+>
+> **After the switchover, before announcing: open one small loan in EACH live collateral and check
+> the block explorer shows the token you selected, in the amount you typed.** That is the check that
+> would have caught this.
 
 ## 3. Explorer and faucet
 
 - `EXPLORER` const and the footer explorer link → `https://flare-explorer.flare.network`
   (Blockscout, same API shape, so `holders_count` keeps working).
-- Remove the "Get test tokens" nav item and all seven `faucet.flare.network` references
-  (borrow hint, lend hint, onboarding modal, quest copy). There is no mainnet faucet;
-  leaving them makes the app look like a testnet.
-- `Coston2 Testnet` badges (sidebar chip and topbar pill) → mainnet styling, or remove.
+- Remove the "Get test tokens" nav item and the remaining `faucet.flare.network` references
+  (borrow hint, lend hint, onboarding modal, quest copy). There is no mainnet faucet; leaving them
+  makes the app look like a testnet. **Set the `FAUCET` const to `""` first** — the borrow error
+  path reads it and drops the faucet link automatically when it is empty, so that one is handled.
+- The network badge reads from `NET_LABEL`, so set that once rather than editing badge markup.
+  Grep for any remaining literal `Coston2` afterwards; the sidebar "Not connected" strings in §1
+  are separate and still manual.
 
 ## 4. Things that are already correct
 
