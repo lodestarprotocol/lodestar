@@ -52,3 +52,6 @@ tools/__pycache__/
 # attacker exactly which machine and which files yield the whole multisig. Untracked; treat the
 # contents as permanently disclosed and re-key before mainnet.
 LAUNCH_RUNBOOK.md
+
+# Describes where key material lives. Same class of file as the runbook that leaked.
+/REKEY.md
