@@ -142,6 +142,12 @@ contract LodestarLoanBook is Ownable2Step, ReentrancyGuard {
     mapping(uint256 => Loan) public loans;
     mapping(uint256 => LoanTerms) public loanTerms; // per-loan snapshot of the borrower-facing terms
     mapping(uint256 => uint16) public openLtvBps; // LTV the loan was underwritten at (its opening tier)
+    /// @dev The `effectiveMinPrincipal()` in force when each loan was opened. Collateral release is
+    ///      gated on THIS, not on a live read: a live read let the floor fall back as the book
+    ///      emptied (so a squatter recovered their premium while keeping the slot) and let it rise
+    ///      above an honest borrower's whole principal (so strangers filling the book destroyed
+    ///      their ability to release anything at all). Frozen per loan, like `openLtvBps`.
+    mapping(uint256 => uint128) public openFloor;
     uint256 public nextLoanId = 1;
     uint256 public reserveBalance; // stable held here as the first-loss buffer
     /// @notice The part of `reserveBalance` that was contributed from outside the protocol and that
@@ -543,6 +549,10 @@ contract LodestarLoanBook is Ownable2Step, ReentrancyGuard {
         });
         _snapshotTerms(id); // freeze borrower-facing terms; later param changes can't rewrite this deal
         openLtvBps[id] = t.ltvBps; // the LTV this loan was underwritten at, for partial-release re-checks
+        // Same value the gate above used: `_addActive` has not run yet, so `activeLoanIds.length`
+        // is unchanged and this second call returns exactly what `open` was priced at. Called
+        // rather than bound to a local because `_open` is at the stack limit.
+        openFloor[id] = effectiveMinPrincipal().toUint128();
         _addActive(id); // track for the withdraw-time impairment sweep (reverts if over the cap)
 
         // Fee is netted from disbursement: the borrower receives principal - fee and the fee
@@ -659,7 +669,15 @@ contract LodestarLoanBook is Ownable2Step, ReentrancyGuard {
         // everything out, and recycle it into the next slot -- making the premium refundable and
         // reducing it to a fee. Releasing collateral therefore has to leave the loan above the
         // ramped floor. See SlotPremiumBypass.t.sol.
-        uint256 floorNow = collateralOut > 0 ? effectiveMinPrincipal() : uint256(minPrincipal);
+        // Release is gated on the floor THIS loan was underwritten at, never a live read. A live
+        // read moves with strangers' behaviour in both directions: it fell back as the book emptied
+        // (refunding a squatter's premium while they kept the slot) and rose above an honest
+        // borrower's entire principal (destroying their release entirely). `max` with the current
+        // flat floor keeps the dust guard intact and makes a zero snapshot -- a loan opened before
+        // this mapping existed -- degrade to the old behaviour rather than to no floor at all.
+        uint256 snap = uint256(openFloor[id]);
+        uint256 flat = uint256(minPrincipal);
+        uint256 floorNow = collateralOut > 0 ? (snap > flat ? snap : flat) : flat;
         if (newPrincipal < floorNow) revert BadParam(); // no dust loans left behind
 
         // --- collateral release gate: healthy remainder at CURRENT price, never post-default ---
