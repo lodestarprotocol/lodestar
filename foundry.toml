@@ -10,6 +10,12 @@ remappings = [
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
     "forge-std/=lib/forge-std/src/",
 ]
+# READ-ONLY, and scoped to one directory. test/fork/XrplToolBytesExecute.t.sol executes the exact
+# memo bytes that tools/xrpl_memo.py writes, rather than a copy transcribed into Solidity, so it has
+# to read them off disk. Deliberately not "./" and deliberately not read-write: a test suite has no
+# business writing to the repo, and a wide read permission would let any future test slurp a file
+# that should never be near a public repo.
+fs_permissions = [{ access = "read", path = "./test/fixtures" }]
 
 [fmt]
 line_length = 120
