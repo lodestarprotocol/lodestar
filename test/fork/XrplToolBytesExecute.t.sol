@@ -71,8 +71,8 @@ contract XrplToolBytesExecuteTest is Test {
         assertEq(b.length, 842, "borrow memo length drifted from the tool's output");
         assertEq(uint8(s[0]), 0xFF, "setup must be an inline 0xFF instruction");
         assertEq(uint8(b[0]), 0xFF, "borrow must be an inline 0xFF instruction");
-        assertLe(s.length, 1024, "setup over the XRPL memo cap");
-        assertLe(b.length, 1024, "borrow over the XRPL memo cap");
+        assertLe(s.length, 1019, "setup over the MEASURED XRPL memo cap (see XrplMemoReference)");
+        assertLe(b.length, 1019, "borrow over the MEASURED XRPL memo cap (see XrplMemoReference)");
         assertEq(IMac2(MAC).getNonce(pa), 0, "fixtures are built at nonce 0/1; regenerate them");
     }
 

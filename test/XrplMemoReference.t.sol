@@ -17,17 +17,23 @@ import {console2} from "forge-std/console2.sol";
 ///         -> the memo is a 32-byte COMMITMENT and an executor supplies the bytes separately.
 ///
 ///   0xFF  the operation is INLINE in the memo after the same 10-byte header, so `_data` is empty
-///         and no executor holds anything.
+///         and no executor holds anything -- though one is still needed to RELAY (see below).
 ///
 /// Both then do:
 ///   userOp = abi.decode(<data>, (PackedUserOperation));
 ///   (bool success, ) = _personalAccount.call{value: msg.value}(userOp.callData);
 ///
 /// THE PRODUCTION SHAPE IS 0xFF, IN TWO MEMOS. A single batch of approve+open encodes to 1,088 bytes,
-/// over XRPL's 1,024-byte memo cap, which is what forced 0xFE and an executor. Splitting it into a
-/// one-time infinite approve (810 bytes) and a single-call borrow (842 bytes) puts both under the cap
-/// and removes the executor from the design entirely. Proven end to end against Flare's real deployed
-/// controller in test/fork/XrplEndToEnd.t.sol.
+/// over the memo cap, which is what forced 0xFE. Splitting it into a one-time infinite approve (810
+/// bytes) and a single-call borrow (842 bytes) puts both under it. Proven end to end against Flare's
+/// real deployed controller in test/fork/XrplEndToEnd.t.sol, and the 842-byte memo is proven sendable
+/// on a validated XRPL testnet transaction.
+///
+/// This removes the executor's DATA DEPENDENCY, not the executor. Flare cannot observe an XRPL
+/// payment by itself: someone must fetch an FDC attestation and call `executeDirectMinting` (0xFF) or
+/// `executeDirectMintingWithData` (0xFE) on the AssetManager. With 0xFF that relayer needs none of
+/// our bytes, so any indexer can do it -- but until one runs, a Payment carrying these memos mints
+/// nothing.
 ///
 /// The nonce is NOT guessed. test/fork/XrplNonceSemantics.t.sol proves against the deployed contract
 /// that it advances by exactly one per operation and that BOTH stale and future nonces revert. Since
@@ -76,7 +82,12 @@ contract XrplMemoReferenceTest is Test {
     uint256 constant NONCE = 0; // setup nonce; the borrow is built at NONCE + 1
     uint8 constant WALLET_ID = 0;
     uint64 constant EXECUTOR_FEE = 1_000_000; // legacy 0xFE path only; 0xFF needs no executor
-    uint256 constant XRPL_MEMO_CAP = 1024;
+    // MEASURED, not taken from the docs. Flare's docs and every write-up say "~1024 bytes", but a real
+    // XRPL testnet submission rejects 1020 and accepts 1019 ("The memo exceeds the maximum allowed
+    // size", local checks, so it never even reaches consensus). The 1024 limit applies to the whole
+    // serialised Memo OBJECT; the MemoData field header consumes 5 of it. Bisected on XRPL testnet
+    // 2026-08-08. Using 1024 here would pass a memo that XRPL refuses to send.
+    uint256 constant XRPL_MEMO_CAP = 1019;
 
     // ---------------------------------------------------------------- builders
 

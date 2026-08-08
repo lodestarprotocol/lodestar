@@ -15,10 +15,20 @@ THE PRODUCTION SHAPE IS 0xFF, IN TWO MEMOS.
     step 1, once per XRPL address:   approve(BOOK, uint256.max)      810 bytes
     step 2, every borrow:            open(FXRP, amount, tier)        842 bytes
 
-Both fit under XRPL's 1,024-byte memo cap, which is what removes the executor from the design
-entirely. Batching approve+open into a single operation encodes to 1,088 bytes, over the cap: that is
-the only reason 0xFE and an executor were ever needed. Proven end to end against Flare's real
-deployed controller in test/fork/XrplEndToEnd.t.sol.
+Both fit under XRPL's memo cap (1,019 bytes, measured -- see XRPL_MEMO_CAP), which is what removes
+the executor's DATA DEPENDENCY. Batching approve+open into one operation encodes to 1,088 bytes, over
+the cap, and that is the only reason 0xFE exists. Proven end to end against Flare's real deployed
+controller in test/fork/XrplEndToEnd.t.sol, and the 842-byte memo is proven sendable on a validated
+XRPL testnet transaction.
+
+AN EXECUTOR IS STILL REQUIRED. 0xFF means nobody has to custody our bytes -- the payload rides in the
+memo and any indexer can relay it -- but Flare cannot see an XRPL payment by itself. Someone must
+fetch an FDC attestation and call `executeDirectMinting` (0xFF) or `executeDirectMintingWithData`
+(0xFE) on the AssetManager. There is no documented public executor, so an integrator runs one or
+arranges for an operator to. Until that exists, a Payment carrying these memos mints nothing.
+
+That also makes the zero executor fee below a deliberate choice with a consequence: with no fee there
+is no incentive for a third-party relayer, so it only suits an executor we run ourselves.
 
 ORDER IS MANDATORY, AND THE NONCE IS PREDICTED, NOT READ.
 The user signs BOTH XRPL Payments before EITHER executes, so the encoder cannot read the second
@@ -62,7 +72,12 @@ MASTER_ACCOUNT_CONTROLLER = "0x434936d47503353f06750Db1A444DBDC5F0AD37c"
 USEROP_TUPLE = "(address,uint256,bytes,bytes,bytes32,uint256,bytes32,bytes,bytes)"
 CALL_ARRAY = "(address,uint256,bytes)[]"
 
-XRPL_MEMO_CAP = 1024  # bytes, per XRPL Memo field
+# MEASURED on XRPL testnet 2026-08-08, not taken from the docs. Every write-up says "~1024 bytes";
+# a real submission rejects 1020 MemoData bytes and accepts 1019, failing local checks with "The
+# memo exceeds the maximum allowed size" before it ever reaches consensus. The 1024 limit is on the
+# whole serialised Memo OBJECT and the MemoData field header eats 5 of it. Asserting 1024 would have
+# let this tool emit a memo XRPL refuses to send.
+XRPL_MEMO_CAP = 1019
 MAX_UINT256 = 2**256 - 1
 
 # Coston2 FAssets AssetManager for FXRP. Mainnet has its own; see MAINNET_SWITCHOVER.md.
@@ -129,9 +144,11 @@ def encode_user_op(sender: str, nonce: int, call_data: bytes) -> bytes:
 def memo_ff(sender: str, nonce: int, calls, wallet_id: int = 0) -> bytes:
     """0xFF: header(10) + abi.encode(userOp) inline. No executor, no separate data channel.
 
-    The executor fee is fixed at 0. There is no executor in this path, and the controller checks
-    `_amount >= _executorFee`, so a non-zero fee here would only create a way for a small deposit to
-    be rejected.
+    The executor fee is fixed at 0. That is a CHOICE, not an absence: an executor is still required
+    to relay (see the module docstring), but with 0xFF it does not need our data, so a relayer we run
+    ourselves needs no on-chain incentive. Set it non-zero only if you want third parties to compete
+    to relay -- and note the controller checks `_amount >= _executorFee`, so a fee above the smallest
+    deposit you support silently makes those deposits unrelayable.
     """
     if not 0 <= wallet_id <= 0xFF:
         raise ValueError("walletId must fit in one byte")

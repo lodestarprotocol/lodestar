@@ -208,7 +208,7 @@ contract XrplEndToEndTest is Test {
             accountGasLimits: bytes32(0), preVerificationGas: 0, gasFees: bytes32(0),
             paymasterAndData: "", signature: ""});
         bytes memory memo1 = abi.encodePacked(bytes1(0xFF), bytes1(uint8(0)), bytes8(uint64(0)), abi.encode(op1));
-        assertLe(memo1.length, 1024, "setup memo must fit the XRPL cap");
+        assertLe(memo1.length, 1019, "setup memo must fit the MEASURED XRPL cap");
 
         vm.prank(ASSET_MANAGER_FXRP);
         mac.handleMintedFAssets(keccak256("xrpl-setup"), XRPL_ADDR, MINT_AMOUNT, 0, memo1, executor, "");
@@ -225,7 +225,7 @@ contract XrplEndToEndTest is Test {
             accountGasLimits: bytes32(0), preVerificationGas: 0, gasFees: bytes32(0),
             paymasterAndData: "", signature: ""});
         bytes memory memo2 = abi.encodePacked(bytes1(0xFF), bytes1(uint8(0)), bytes8(uint64(0)), abi.encode(op2));
-        assertLe(memo2.length, 1024, "borrow memo must fit the XRPL cap");
+        assertLe(memo2.length, 1019, "borrow memo must fit the MEASURED XRPL cap");
 
         vm.prank(ASSET_MANAGER_FXRP);
         mac.handleMintedFAssets(keccak256("xrpl-borrow"), XRPL_ADDR, MINT_AMOUNT, 0, memo2, executor, "");
