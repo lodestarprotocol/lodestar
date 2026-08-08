@@ -65,6 +65,19 @@ CALL_ARRAY = "(address,uint256,bytes)[]"
 XRPL_MEMO_CAP = 1024  # bytes, per XRPL Memo field
 MAX_UINT256 = 2**256 - 1
 
+# Coston2 FAssets AssetManager for FXRP. Mainnet has its own; see MAINNET_SWITCHOVER.md.
+ASSET_MANAGER_FXRP_COSTON2 = "0xc1Ca88b937d0b528842F95d5731ffB586f4fbDFA"
+
+
+def memo_data(memo: bytes) -> str:
+    """The value to paste into an XRPL Memo field: bare uppercase hex, NO 0x.
+
+    XRPL memo fields are hex strings. Verified against xrpl-py 5.0.0: a 0x-prefixed MemoData is
+    accepted by the model constructor without complaint and then dies at serialization with
+    "non-hexadecimal number found", i.e. the mistake surfaces at submit time rather than build time.
+    """
+    return memo.hex().upper()
+
 
 def selector(signature: str) -> bytes:
     return keccak(text=signature)[:4]
@@ -147,28 +160,87 @@ def borrow_calls(amount, tier, book=BOOK_COSTON2, fxrp=FXRP_COSTON2):
     return [(book, 0, encode_open(fxrp, amount, tier))]
 
 
-def build(personal_account, amount, tier, nonce, book=BOOK_COSTON2, fxrp=FXRP_COSTON2, wallet_id=0):
-    """The two production memos. `nonce` is the CURRENT on-chain nonce of the personal account."""
+def _step(kind, memo, nonce, order, note):
+    if len(memo) > XRPL_MEMO_CAP:
+        raise ValueError(
+            "%s memo is %d bytes, over the XRPL cap of %d. This shape is unsendable from an XRPL "
+            "wallet; fall back to the 0xFE executor path." % (kind, len(memo), XRPL_MEMO_CAP))
+    return {"nonce": nonce, "send_order": order, "memo_len": len(memo),
+            "memo_data": memo_data(memo),        # paste THIS into the XRPL Memo field
+            "memo_hex": "0x" + memo.hex(),       # same bytes, 0x-prefixed, for EVM tooling only
+            "note": note}
+
+
+def build(personal_account, amount, tier, nonce, book=BOOK_COSTON2, fxrp=FXRP_COSTON2,
+          wallet_id=0, needs_setup=True):
+    """The production memos. `nonce` is the CURRENT on-chain nonce of the personal account.
+
+    `needs_setup=False` when the account already holds an infinite allowance to the book. That is not
+    cosmetic: the setup Payment is what advances the nonce, so skipping it means the borrow executes
+    at `nonce`, not `nonce + 1`. Emitting a borrow at nonce+1 alongside a "you can skip step 1"
+    warning -- which is what this did -- hands the user a memo that reverts AFTER their XRP is spent.
+    """
     pa = to_checksum_address(personal_account)
-    s = memo_ff(pa, nonce, setup_calls(book, fxrp), wallet_id)
-    b = memo_ff(pa, nonce + 1, borrow_calls(amount, tier, book, fxrp), wallet_id)
-    for name, m in (("setup", s), ("borrow", b)):
-        if len(m) > XRPL_MEMO_CAP:
-            raise ValueError(
-                "%s memo is %d bytes, over the XRPL cap of %d. This shape is unsendable from an "
-                "XRPL wallet; fall back to the 0xFE executor path." % (name, len(m), XRPL_MEMO_CAP))
-    return {
-        "personal_account": pa,
-        "collateral_amount_6dp": amount,
-        "tier": tier,
-        "setup": {"nonce": nonce, "memo_hex": "0x" + s.hex(), "memo_len": len(s),
-                  "send_first": True,
-                  "note": "One-time. Skip if allowance is already max (see the `state` command)."},
-        "borrow": {"nonce": nonce + 1, "memo_hex": "0x" + b.hex(), "memo_len": len(b),
-                   "send_second": True,
-                   "note": "Invalid unless the setup Payment lands first. A stale or future nonce "
-                           "reverts on chain, proven in test/fork/XrplNonceSemantics.t.sol."},
-    }
+    out = {"personal_account": pa, "collateral_amount_6dp": amount, "tier": tier,
+           "setup_required": bool(needs_setup)}
+
+    if needs_setup:
+        out["setup"] = _step(
+            "setup", memo_ff(pa, nonce, setup_calls(book, fxrp), wallet_id), nonce, 1,
+            "Send FIRST. One-time per XRPL address: grants the book an unlimited FXRP allowance so "
+            "no later borrow needs an approve call in its memo. The FXRP this Payment mints is NOT "
+            "spent -- it stays in your personal account and can be locked by the borrow below.")
+        borrow_nonce = nonce + 1
+        borrow_note = ("Send SECOND, and only after the setup Payment has been processed. It is "
+                       "signed for nonce %d and reverts at any other, which is proven on chain in "
+                       "test/fork/XrplNonceSemantics.t.sol." % borrow_nonce)
+    else:
+        borrow_nonce = nonce
+        borrow_note = ("The allowance is already set, so there is no setup step and this is the ONLY "
+                       "Payment to send. Signed for nonce %d." % borrow_nonce)
+
+    out["borrow"] = _step("borrow", memo_ff(pa, borrow_nonce, borrow_calls(amount, tier, book, fxrp),
+                                            wallet_id), borrow_nonce,
+                          2 if needs_setup else 1, borrow_note)
+    return out
+
+
+# --------------------------------------------------------------------------- XRPL address checks
+
+_B58 = "rpshnaf39wBUDNEGHJKLM4PQRST7VWXYZ2bcdeCg65jkm8oFqi1tuvAxyz"
+
+
+def is_valid_xrpl_address(addr: str) -> bool:
+    """Base58-decode and verify the 4-byte double-SHA256 checksum.
+
+    Used instead of trusting a regex match, because the candidate is scraped out of an ABI blob whose
+    exact layout is not vendored here, and the result is an address a user will send real XRP to.
+    """
+    import hashlib
+    if not addr or addr[0] != "r" or not 25 <= len(addr) <= 35:
+        return False
+    n = 0
+    for ch in addr:
+        i = _B58.find(ch)
+        if i < 0:
+            return False
+        n = n * 58 + i
+    raw = n.to_bytes(25, "big") if n < 256**25 else None
+    if raw is None or raw[0] != 0x00:          # 0x00 = classic account address prefix
+        return False
+    return hashlib.sha256(hashlib.sha256(raw[:21]).digest()).digest()[:4] == raw[21:]
+
+
+def _xrpl_address_in(blob: bytes):
+    """Find the one checksum-valid XRPL address in an ABI-encoded struct."""
+    import re
+    for m in re.finditer(rb"r[1-9A-HJ-NP-Za-km-z]{24,34}", blob):
+        cand = m.group(0).decode()
+        # the regex is greedy at the tail; try progressively shorter prefixes
+        for end in range(len(cand), 24, -1):
+            if is_valid_xrpl_address(cand[:end]):
+                return cand[:end]
+    return None
 
 
 # --------------------------------------------------------------------------- verification
@@ -262,6 +334,29 @@ def selftest() -> int:
     bad += 0 if ok else 1
     print("  [%s] borrow nonce is setup nonce + 1" % ("PASS" if ok else "FAIL"))
 
+    # F1 regression: with the allowance already set there is no setup Payment to advance the nonce,
+    # so the borrow must be signed for the CURRENT nonce, not nonce+1.
+    skip = build(PA, AMOUNT, TIER, 7, needs_setup=False)
+    ok = skip["borrow"]["nonce"] == 7 and "setup" not in skip
+    bad += 0 if ok else 1
+    print("  [%s] returning user (allowance set): borrow at the CURRENT nonce, no setup memo"
+          % ("PASS" if ok else "FAIL"))
+
+    # F2 regression: what goes in an XRPL Memo field must be bare hex. xrpl-py accepts a 0x prefix at
+    # construction and only fails at serialization, so this is caught here instead of at submit time.
+    md = got["borrow"]["memo_data"]
+    ok = (not md.lower().startswith("0x")) and md == md.upper() and len(md) % 2 == 0
+    try:
+        bytes.fromhex(md)
+    except ValueError:
+        ok = False
+    bad += 0 if ok else 1
+    print("  [%s] memo_data is bare, even-length, uppercase hex (XRPL Memo ready)"
+          % ("PASS" if ok else "FAIL"))
+    ok = md.lower() == got["borrow"]["memo_hex"][2:].lower()
+    bad += 0 if ok else 1
+    print("  [%s] memo_data and memo_hex are the same bytes" % ("PASS" if ok else "FAIL"))
+
     print("  [INFO] legacy batched 0xFE _data is %d bytes, over the %d cap -- which is why the "
           "production shape splits" % (r["legacy_data_len"], XRPL_MEMO_CAP))
     print("\n%s" % ("ALL MATCH SOLIDITY" if bad == 0 else "%d MISMATCH(ES) - DO NOT USE" % bad))
@@ -290,6 +385,51 @@ def _chain(rpc):
     return w3, mac, erc20
 
 
+def _minting_info(w3, asset_manager, max_agents=5):
+    """Lot size and the agents a user can actually send XRP to, read from the AssetManager.
+
+    Capped at `max_agents` so a busy network does not turn one CLI call into dozens of RPC round
+    trips. The cap is REPORTED in the output rather than silently applied -- a truncated list that
+    looks complete is how someone concludes there is no capacity when there is.
+    """
+    am = w3.eth.contract(address=to_checksum_address(asset_manager), abi=[
+        {"name": "lotSize", "type": "function", "stateMutability": "view",
+         "inputs": [], "outputs": [{"type": "uint256"}]},
+        {"name": "assetMintingDecimals", "type": "function", "stateMutability": "view",
+         "inputs": [], "outputs": [{"type": "uint8"}]},
+        {"name": "getAvailableAgentsList", "type": "function", "stateMutability": "view",
+         "inputs": [{"type": "uint256"}, {"type": "uint256"}],
+         "outputs": [{"type": "address[]"}, {"type": "uint256"}]},
+    ])
+    lot = am.functions.lotSize().call()
+    dec = am.functions.assetMintingDecimals().call()
+    vaults, total = am.functions.getAvailableAgentsList(0, max_agents).call()
+
+    agents = []
+    for v in vaults:
+        # getAgentInfo returns a large struct; call it raw and pull the checksum-valid XRPL address
+        # rather than vendoring an ABI that can change under us.
+        try:
+            raw = w3.eth.call({"to": to_checksum_address(asset_manager),
+                               "data": keccak(text="getAgentInfo(address)")[:4]
+                                       + abi_encode(["address"], [v])})
+            a = _xrpl_address_in(raw)
+        except Exception:
+            a = None
+        agents.append({"agent_vault": v, "underlying_xrpl_address": a,
+                       "usable": a is not None})
+    return {
+        "lot_size_units": lot, "asset_minting_decimals": dec,
+        "lot_size_xrp": lot / (10 ** dec),
+        "min_payment_xrp": lot / (10 ** dec),
+        "payment_must_be_whole_lots": True,
+        "agents_total_available": total,
+        "agents_listed": len(agents),
+        "agents_truncated": total > len(agents),
+        "agents": agents,
+    }
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -303,6 +443,9 @@ def main():
         p.add_argument("--rpc", default="https://coston2-api.flare.network/ext/C/rpc")
         p.add_argument("--book", default=BOOK_COSTON2)
         p.add_argument("--fxrp", default=FXRP_COSTON2)
+        p.add_argument("--asset-manager", default=ASSET_MANAGER_FXRP_COSTON2)
+        p.add_argument("--no-agents", action="store_true",
+                       help="skip the agent lookup (fewer RPC calls, but no destination address)")
         if name == "build":
             p.add_argument("--amount", type=float, required=True,
                            help="FXRP to lock as collateral, human units")
@@ -321,20 +464,27 @@ def main():
     allow = tok.functions.allowance(pa, to_checksum_address(a.book)).call()
 
     if a.cmd == "state":
-        print(json.dumps({
-            "xrpl_address": a.xrpl, "personal_account": pa, "chain_id": w3.eth.chain_id,
-            "nonce": nonce, "fxrp_balance_6dp": bal, "fxrp_balance": bal / 1e6,
-            "allowance_to_book": str(allow),
-            "setup_already_done": allow == MAX_UINT256,
-        }, indent=2))
+        st = {"xrpl_address": a.xrpl, "personal_account": pa, "chain_id": w3.eth.chain_id,
+              "nonce": nonce, "fxrp_balance_6dp": bal, "fxrp_balance": bal / 1e6,
+              "allowance_to_book": str(allow),
+              "setup_already_done": allow == MAX_UINT256,
+              "next_borrow_nonce": nonce if allow == MAX_UINT256 else nonce + 1}
+        if not a.no_agents:
+            st["where_to_send"] = _minting_info(w3, a.asset_manager)
+        print(json.dumps(st, indent=2))
         return
 
     amount = int(round(a.amount * 1e6))
-    out = build(pa, amount, a.tier, nonce, book=a.book, fxrp=a.fxrp)
+    # The allowance decides whether there IS a setup step, and therefore which nonce the borrow must
+    # be signed for. Passing it in rather than warning about it afterwards is F1.
+    out = build(pa, amount, a.tier, nonce, book=a.book, fxrp=a.fxrp,
+                needs_setup=(allow != MAX_UINT256))
     out["xrpl_address"] = a.xrpl
     out["chain_id"] = w3.eth.chain_id
     out["fxrp_balance_now_6dp"] = bal
     out["setup_already_done"] = (allow == MAX_UINT256)
+    if not a.no_agents:
+        out["where_to_send"] = _minting_info(w3, a.asset_manager)
 
     # The borrow locks `amount`, which must be in the account WHEN THE BORROW EXECUTES -- that is the
     # balance now plus whatever the two Payments mint. Stated rather than silently assumed, because
@@ -342,8 +492,23 @@ def main():
     out["warnings"] = []
     if out["setup_already_done"]:
         out["warnings"].append(
-            "Allowance is already max, so step 1 is unnecessary. Send ONLY the borrow memo, and "
-            "rebuild with the borrow at nonce %d." % nonce)
+            "Allowance is already set, so there is no setup step. The single borrow memo above is "
+            "already signed for the current nonce (%d) -- nothing to rebuild." % nonce)
+    w = out.get("where_to_send")
+    if w:
+        if w["agents_truncated"]:
+            out["warnings"].append(
+                "Showing %d of %d available agents (capped to keep this to one quick call)."
+                % (w["agents_listed"], w["agents_total_available"]))
+        if not any(g["usable"] for g in w["agents"]):
+            out["warnings"].append(
+                "No agent returned a checksum-valid XRPL address. Do NOT guess a destination.")
+        n_pay = 2 if out["setup_required"] else 1
+        out["warnings"].append(
+            "Every Payment must be a whole multiple of the %g XRP lot size, so this costs %d "
+            "Payment(s) of at least %g XRP each. The XRP in the setup Payment is not lost: it mints "
+            "FXRP into your personal account and the borrow can lock it."
+            % (w["lot_size_xrp"], n_pay, w["lot_size_xrp"]))
     if bal < amount:
         out["warnings"].append(
             "The account holds %.6f FXRP now but the borrow locks %.6f. The shortfall must be "
