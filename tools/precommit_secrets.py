@@ -52,6 +52,18 @@ CONTENT_DENY = [
 # Files where a 64-hex string is normal and meaningless (hashes, bytes32 literals, minified bundles).
 HEX_OK = re.compile(r"\.(sol|json|lock|min\.js|svg|png|jpg|jpeg|gif|ico)$|(^|/)out/|(^|/)cache/|(^|/)lib/")
 
+# A 32-byte hash and a 32-byte private key are shape-identical, so the 64-hex rule cannot tell them
+# apart and must not try to guess. A file that legitimately holds hashes (keccak test vectors, for
+# instance) may opt OUT OF THAT ONE RULE with a line like:
+#
+#     # precommit-allow-hex: keccak256 test vectors, recomputed from public inputs by selftest
+#
+# Deliberately not `git commit --no-verify`, which disables every check for an entire commit and
+# leaves no trace in the diff. This lives in the file, states a reason, and a reviewer sees it.
+# Every other rule -- PEM blocks, keystore JSON, AWS keys, and `private_key = "..."` assignments,
+# which is how a key realistically gets pasted -- stays armed.
+ALLOW_HEX = re.compile(r"#\s*precommit-allow-hex:\s*\S")
+
 
 def staged_files():
     r = subprocess.run(["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
@@ -65,6 +77,17 @@ def added_lines(path):
     return [l[1:] for l in r.stdout.splitlines() if l.startswith("+") and not l.startswith("+++")]
 
 
+def _fileOptsOutOfHexRule(path):
+    """Does the file carry an explicit, reasoned opt-out of the 64-hex rule?
+
+    Read from the STAGED blob, not the worktree, so the annotation being committed is the one that
+    counts and a local-only edit cannot grant an exemption.
+    """
+    r = subprocess.run(["git", "show", ":" + path], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    return r.returncode == 0 and bool(ALLOW_HEX.search(r.stdout))
+
+
 def main():
     problems = []
     for f in staged_files():
@@ -72,9 +95,10 @@ def main():
             if rx.search(f):
                 problems.append((f, None, "filename is on the secrets denylist"))
                 break
+        hex_exempt = HEX_OK.search(f) or _fileOptsOutOfHexRule(f)
         for label, rx in CONTENT_DENY:
-            if rx is CONTENT_DENY[0][1] and HEX_OK.search(f):
-                continue  # 64-hex is normal in Solidity/JSON/bundles
+            if rx is CONTENT_DENY[0][1] and hex_exempt:
+                continue  # 64-hex is normal here, or the file opted out with a stated reason
             for i, line in enumerate(added_lines(f), 1):
                 if rx.search(line):
                     problems.append((f, i, label))
