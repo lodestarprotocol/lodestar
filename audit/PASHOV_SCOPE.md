@@ -6,7 +6,8 @@ Repo: `github.com/lodestarprotocol/lodestar`, branch `main`. Prepared 2026-08-06
 > **The hash moved because history was rewritten on 2026-08-08.** A launch runbook had been committed
 > to this public repo and was purged from all 169 commits with git-filter-repo, so every SHA quoted in
 > any earlier copy of this document is gone. The CONTRACTS are byte-identical -- verified by hashing
-> src/ against a pre-rewrite mirror -- and the suite is unchanged at 262 non-fork tests, 0 failures.
+> src/ against a pre-rewrite mirror. The suite was 262 non-fork tests at the rewrite and is 264
+> today; the two added are out-of-scope XRPL tooling tests, and src/ has not moved since.
 
 The pin refers to the state of `src/`. Later commits on `main` may touch this document, the dapp
 or tests without changing `src/`; verify with `git diff d242c6b..main -- src/`, which must be
@@ -176,11 +177,11 @@ multisig handover. `test/LaunchConfig.t.sol` pins those constants.
 
 ## 5. Tests
 
-**262 non-fork tests, 0 failures** (verified 2026-08-08 at `d242c6b`). 244 at `c0fc6b1a`; since then
+**264 non-fork tests, 0 failures** (verified 2026-08-08 at `d242c6b`). 244 at `c0fc6b1a`; since then
 +11 in `test/security/OpenGuards.t.sol` (§4b), +3 in `test/LaunchConfig.t.sol`, +3 in
 `test/XrplMemoReference.t.sol` (out-of-scope tooling) and +1 gas-ceiling measurement in
 `test/SweepGasCeiling.t.sol` — the ~9.9M-gas mass-crash exit sweep that justifies capping
-`maxActiveLoans` at 400. Plus **19 fork tests** against live Flare and Coston2 state (one heavy
+`maxActiveLoans` at 400. Plus **26 fork tests** against live Flare and Coston2 state (one heavy
 Algebra 2-hop test is gated behind `HEAVY_FORK=1`; it 429s on public RPCs). Those include the XRPL
 borrow flow driven through Flare's real deployed Smart Accounts controller
 (`test/fork/SmartAccountBorrow.t.sol`, `test/fork/XrplEndToEnd.t.sol`) and a 400-loan exit-sweep
@@ -191,7 +192,7 @@ Four invariant campaigns run **128,000 calls each with 0 reverts**, covering sys
 stable, the active-loan array, and `reserveFloor <= reserveBalance`.
 
 ```
-forge test --no-match-path "test/fork/*"        # 262 pass
+forge test --no-match-path "test/fork/*"        # 264 pass
 FORK_RPC=<flare rpc> forge test --match-path "test/fork/*"
 ```
 
