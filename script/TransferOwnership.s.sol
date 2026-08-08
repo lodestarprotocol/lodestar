@@ -18,7 +18,8 @@ interface ILoanBookReserve {
 ///   export RESERVE=0x...   # optional: revenue destination; defaults to MULTISIG
 ///   forge script script/TransferOwnership.s.sol:TransferOwnership \
 ///     --rpc-url http://127.0.0.1:9650/ext/bc/C/rpc \
-///     --private-key $(cat <redacted-keystore-path>) --broadcast --slow
+///     --account <keystore-name> --sender $DEPLOYER --broadcast --slow
+///     (encrypted keystore; never `--private-key $(cat <file>)` -- it leaks both key and path)
 ///
 /// @dev The contracts use OZ `Ownable2Step`: this script only PROPOSES the multisig as pending
 ///      owner (a fat-fingered address can no longer brick ownership — the deployer stays owner

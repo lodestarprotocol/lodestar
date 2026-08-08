@@ -19,10 +19,12 @@ interface IFlareContractRegistry {
 /// @notice Deploys Lodestar to FLARE MAINNET (chainId 14). Ownership is left with the deployer so
 ///         the wiring can be verified on-chain, THEN handed to the multisig via TransferOwnership.s.sol.
 ///
-/// Run (deployer key never on the command line; read from the locked file at run time):
-///   export DEPLOYER=<redacted-address>
-///   forge script script/DeployMainnet.s.sol:DeployMainnet --rpc-url http://127.0.0.1:9650/ext/bc/C/rpc \
-///     --private-key $(cat <redacted-keystore-path>) --broadcast --slow
+/// Run. Use an ENCRYPTED KEYSTORE (`cast wallet import`), never `--private-key $(cat <file>)`:
+/// the latter puts the key in shell history and in the process list of every user on the box,
+/// and documenting the file's path -- as this header used to -- publishes where to go looking.
+///   export DEPLOYER=<deployer address>   # must match the keystore below
+///   forge script script/DeployMainnet.s.sol:DeployMainnet --rpc-url <rpc> \
+///     --account <keystore-name> --sender $DEPLOYER --broadcast --slow
 ///
 /// EVERY address below is IMMUTABLE once deployed. A wrong token/feed cannot be fixed. The script
 /// reverts if a required address is left at address(0). VERIFY each against official sources first.
