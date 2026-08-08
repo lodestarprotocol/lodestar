@@ -1,11 +1,16 @@
 # Lodestar — audit scope
 
-**Commit: `32e6e1c` — `Remove the slot-premium ramp; pin the launch config in the deploy script`**
+**Commit: `d242c6b` — `Remove the slot-premium ramp; pin the launch config in the deploy script`**
 Repo: `github.com/lodestarprotocol/lodestar`, branch `main`. Prepared 2026-08-06, re-pinned 2026-08-08.
 
+> **The hash moved because history was rewritten on 2026-08-08.** A launch runbook had been committed
+> to this public repo and was purged from all 169 commits with git-filter-repo, so every SHA quoted in
+> any earlier copy of this document is gone. The CONTRACTS are byte-identical -- verified by hashing
+> src/ against a pre-rewrite mirror -- and the suite is unchanged at 262 non-fork tests, 0 failures.
+
 The pin refers to the state of `src/`. Later commits on `main` may touch this document, the dapp
-or tests without changing `src/`; verify with `git diff 32e6e1c..main -- src/`, which must be
-empty. Reviewing `main` at or after `32e6e1c` therefore reviews the same contracts.
+or tests without changing `src/`; verify with `git diff d242c6b..main -- src/`, which must be
+empty. Reviewing `main` at or after `d242c6b` therefore reviews the same contracts.
 
 This supersedes `43ee872`, `1a66b01`, `c0fc6b1a` and `e0ac90e`. Two Solidity deltas since
 `1a66b01`, both in `LodestarLoanBook.sol` and both described below: the first-loss buffer (§4) and
@@ -171,7 +176,7 @@ multisig handover. `test/LaunchConfig.t.sol` pins those constants.
 
 ## 5. Tests
 
-**262 non-fork tests, 0 failures** (verified 2026-08-08 at `32e6e1c`). 244 at `c0fc6b1a`; since then
+**262 non-fork tests, 0 failures** (verified 2026-08-08 at `d242c6b`). 244 at `c0fc6b1a`; since then
 +11 in `test/security/OpenGuards.t.sol` (§4b), +3 in `test/LaunchConfig.t.sol`, +3 in
 `test/XrplMemoReference.t.sol` (out-of-scope tooling) and +1 gas-ceiling measurement in
 `test/SweepGasCeiling.t.sol` — the ~9.9M-gas mass-crash exit sweep that justifies capping
