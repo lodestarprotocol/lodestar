@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """Build the XRPL memos that let an XRP holder borrow from Lodestar with no EVM wallet.
 
-An XRPL user sends a Payment to an FAssets agent. FXRP mints straight into the Flare
+An XRPL user sends a Payment to the FAssets DIRECT-MINTING address -- the Core Vault, published by
+`AssetManager.directMintingPaymentAddress()` and never guessed. FXRP mints straight into the Flare
 `PersonalAccount` derived from their XRPL address, and a memo on that Payment tells the chain what to
-do next. Flare's deployed `MemoInstructions` library supports two custom opcodes:
+do next.
+
+⚠️ NOT an agent's underlying address. Agent addresses belong to the legacy reserve-then-pay minting
+flow. An earlier version of this tool listed them as the destination: they were checksum-valid and
+completely wrong, which is precisely why the mistake survived review. Flare's deployed `MemoInstructions` library supports two custom opcodes:
 
     0xFE   the memo is a 32-byte COMMITMENT to keccak256(_data); an EXECUTOR must supply the
            matching bytes in a separate argument.
@@ -92,6 +97,21 @@ def memo_data(memo: bytes) -> str:
     "non-hexadecimal number found", i.e. the mistake surfaces at submit time rather than build time.
     """
     return memo.hex().upper()
+
+
+def checked_address(a: str, what: str) -> str:
+    """Checksum-VERIFY a mixed-case address instead of silently re-deriving its casing.
+
+    `to_checksum_address` recomputes the casing rather than validating it, so a mistyped --book was
+    accepted without complaint -- and --book is used both to read the allowance and as the approval
+    target, so the tool would have emitted an infinite FXRP approval to an unaudited address.
+    All-lower and all-upper input carries no checksum to verify, so it is accepted as-is.
+    """
+    from eth_utils import is_checksum_address
+    body = a[2:] if a.lower().startswith("0x") else a
+    if body != body.lower() and body != body.upper() and not is_checksum_address(a):
+        raise ValueError("%s has a bad EIP-55 checksum: %s" % (what, a))
+    return to_checksum_address(a)
 
 
 def selector(signature: str) -> bytes:
@@ -197,7 +217,19 @@ def build(personal_account, amount, tier, nonce, book=BOOK_COSTON2, fxrp=FXRP_CO
     at `nonce`, not `nonce + 1`. Emitting a borrow at nonce+1 alongside a "you can skip step 1"
     warning -- which is what this did -- hands the user a memo that reverts AFTER their XRP is spent.
     """
-    pa = to_checksum_address(personal_account)
+    pa = checked_address(personal_account, "personal account")
+    # `open()` reverts BadParam on a zero collateral amount, and the CLI's round() turns --amount 0,
+    # 0.0000004 and small negatives into exactly 0. Emitting a memo for any of those hands the user
+    # bytes that revert after their XRP is spent.
+    if not isinstance(amount, int) or amount <= 0:
+        raise ValueError("collateral amount must be a positive integer of the token's smallest unit; "
+                         "got %r. open() reverts BadParam at 0." % (amount,))
+    if not isinstance(tier, int) or tier < 0:
+        raise ValueError("tier must be a non-negative integer; got %r" % (tier,))
+    # `book` is BOTH the allowance target and the borrow target. A mistyped one means an infinite
+    # FXRP approval to an address nobody has audited, so it is checksum-verified, not re-derived.
+    book = checked_address(book, "--book")
+    fxrp = checked_address(fxrp, "--fxrp")
     out = {"personal_account": pa, "collateral_amount_6dp": amount, "tier": tier,
            "setup_required": bool(needs_setup)}
 
@@ -227,36 +259,75 @@ def build(personal_account, amount, tier, nonce, book=BOOK_COSTON2, fxrp=FXRP_CO
 _B58 = "rpshnaf39wBUDNEGHJKLM4PQRST7VWXYZ2bcdeCg65jkm8oFqi1tuvAxyz"
 
 
-def is_valid_xrpl_address(addr: str) -> bool:
-    """Base58-decode and verify the 4-byte double-SHA256 checksum.
-
-    Used instead of trusting a regex match, because the candidate is scraped out of an ABI blob whose
-    exact layout is not vendored here, and the result is an address a user will send real XRP to.
-    """
+def _b58_decode_check(addr: str):
+    """Decode an XRPL classic address to its 25 canonical bytes, or None."""
     import hashlib
-    if not addr or addr[0] != "r" or not 25 <= len(addr) <= 35:
-        return False
+    if not addr or addr[0] != "r":
+        return None
     n = 0
     for ch in addr:
         i = _B58.find(ch)
         if i < 0:
-            return False
+            return None
         n = n * 58 + i
-    raw = n.to_bytes(25, "big") if n < 256**25 else None
-    if raw is None or raw[0] != 0x00:          # 0x00 = classic account address prefix
-        return False
-    return hashlib.sha256(hashlib.sha256(raw[:21]).digest()).digest()[:4] == raw[21:]
+    if n >= 256 ** 25:
+        return None
+    raw = n.to_bytes(25, "big")
+    if raw[0] != 0x00:                          # 0x00 = classic account address prefix
+        return None
+    if hashlib.sha256(hashlib.sha256(raw[:21]).digest()).digest()[:4] != raw[21:]:
+        return None
+    return raw
+
+
+def _b58_encode(raw: bytes) -> str:
+    n = int.from_bytes(raw, "big")
+    out = ""
+    while n:
+        n, r = divmod(n, 58)
+        out = _B58[r] + out
+    # every leading zero BYTE is one leading _B58[0] character, and _B58[0] is 'r'
+    for b in raw:
+        if b != 0:
+            break
+        out = _B58[0] + out
+    return out
+
+
+def is_valid_xrpl_address(addr: str) -> bool:
+    """Decode, verify the 4-byte double-SHA256 checksum, and require a CANONICAL round trip.
+
+    The round trip is the load-bearing part. In XRPL's base58 alphabet 'r' is digit ZERO, so a
+    leading 'r' contributes nothing to the decoded integer: without this check, "r" + addr decodes to
+    exactly the same 25 bytes as addr and passes the checksum. `_xrpl_address_in` tries the longest
+    candidate first, so it returned that padded string as the destination -- an address a user sends
+    real XRP to, and one that maps to a DIFFERENT account on chain.
+
+    Verified against a regex match instead of trusted, because the candidate is scraped out of an ABI
+    blob whose exact layout is not vendored here.
+    """
+    raw = _b58_decode_check(addr)
+    return raw is not None and _b58_encode(raw) == addr
 
 
 def _xrpl_address_in(blob: bytes):
-    """Find the one checksum-valid XRPL address in an ABI-encoded struct."""
-    import re
-    for m in re.finditer(rb"r[1-9A-HJ-NP-Za-km-z]{24,34}", blob):
-        cand = m.group(0).decode()
-        # the regex is greedy at the tail; try progressively shorter prefixes
-        for end in range(len(cand), 24, -1):
-            if is_valid_xrpl_address(cand[:end]):
-                return cand[:end]
+    """Find the checksum-valid XRPL address in an ABI-encoded struct, or None.
+
+    Scans EVERY candidate start offset rather than using re.finditer. finditer returns
+    non-overlapping matches and the pattern is greedy, so a stray base58 'r' shortly before the
+    address swallowed its opening characters and the real address was never reached -- a false
+    negative that made a usable agent look unusable.
+    """
+    text = blob.decode("latin-1")
+    n = len(text)
+    for i in range(n):
+        if text[i] != "r":
+            continue
+        # canonical classic addresses are 25-35 chars; try longest first, but validate canonically
+        for end in range(min(i + 35, n), i + 24, -1):
+            cand = text[i:end]
+            if is_valid_xrpl_address(cand):
+                return cand
     return None
 
 
@@ -403,47 +474,41 @@ def _chain(rpc):
 
 
 def _minting_info(w3, asset_manager, max_agents=5):
-    """Lot size and the agents a user can actually send XRP to, read from the AssetManager.
+    """Where the XRP must go, and the limits on it. Read from the AssetManager, never guessed.
 
-    Capped at `max_agents` so a busy network does not turn one CLI call into dozens of RPC round
-    trips. The cap is REPORTED in the output rather than silently applied -- a truncated list that
-    looks complete is how someone concludes there is no capacity when there is.
+    ⚠️ THE DESTINATION IS THE CORE VAULT, NOT AN AGENT. An earlier version of this function listed
+    FAssets AGENT underlying addresses and presented them as `where_to_send`. That was wrong and it
+    would have lost user funds: agent addresses belong to the legacy reserve-then-pay minting flow,
+    while DIRECT minting -- the flow these memos use -- is paid to the single address the contract
+    itself publishes via `directMintingPaymentAddress()`. The addresses were checksum-valid, which is
+    exactly why the mistake survived: they were well-formed and wrong.
+
+    Confirmed on Coston2: directMintingPaymentAddress() == rDhpmiPq4BVBDWMVdSrmkgt8thKyRzGV1p.
     """
     am = w3.eth.contract(address=to_checksum_address(asset_manager), abi=[
         {"name": "lotSize", "type": "function", "stateMutability": "view",
          "inputs": [], "outputs": [{"type": "uint256"}]},
         {"name": "assetMintingDecimals", "type": "function", "stateMutability": "view",
          "inputs": [], "outputs": [{"type": "uint8"}]},
-        {"name": "getAvailableAgentsList", "type": "function", "stateMutability": "view",
-         "inputs": [{"type": "uint256"}, {"type": "uint256"}],
-         "outputs": [{"type": "address[]"}, {"type": "uint256"}]},
+        {"name": "directMintingPaymentAddress", "type": "function", "stateMutability": "view",
+         "inputs": [], "outputs": [{"type": "string"}]},
     ])
     lot = am.functions.lotSize().call()
     dec = am.functions.assetMintingDecimals().call()
-    vaults, total = am.functions.getAvailableAgentsList(0, max_agents).call()
+    dest = am.functions.directMintingPaymentAddress().call()
 
-    agents = []
-    for v in vaults:
-        # getAgentInfo returns a large struct; call it raw and pull the checksum-valid XRPL address
-        # rather than vendoring an ABI that can change under us.
-        try:
-            raw = w3.eth.call({"to": to_checksum_address(asset_manager),
-                               "data": keccak(text="getAgentInfo(address)")[:4]
-                                       + abi_encode(["address"], [v])})
-            a = _xrpl_address_in(raw)
-        except Exception:
-            a = None
-        agents.append({"agent_vault": v, "underlying_xrpl_address": a,
-                       "usable": a is not None})
+    # Validated, not trusted: this is the address a user sends real XRP to, and a malformed one read
+    # from a mis-wired contract must fail loudly rather than be printed.
+    if not is_valid_xrpl_address(dest):
+        raise ValueError("directMintingPaymentAddress() returned something that is not a valid XRPL "
+                         "address: %r. Refusing to print a destination." % dest)
     return {
+        "destination_xrpl_address": dest,
+        "destination_source": "AssetManager.directMintingPaymentAddress() (the Core Vault)",
         "lot_size_units": lot, "asset_minting_decimals": dec,
         "lot_size_xrp": lot / (10 ** dec),
         "min_payment_xrp": lot / (10 ** dec),
         "payment_must_be_whole_lots": True,
-        "agents_total_available": total,
-        "agents_listed": len(agents),
-        "agents_truncated": total > len(agents),
-        "agents": agents,
     }
 
 
@@ -472,6 +537,16 @@ def main():
     if a.cmd == "selftest":
         sys.exit(selftest())
 
+    # C2: getPersonalAccount accepts ANY string -- verified live, a one-character typo,
+    # "not-an-xrpl-address" and even "" each return a DIFFERENT account with no revert. So an
+    # unvalidated --xrpl builds a perfectly-formed memo whose userOp.sender is an account the user
+    # does not control; the attestation carries their REAL address, sender mismatches, and it reverts
+    # after the XRP is gone. Checked here, before anything touches chain.
+    if not is_valid_xrpl_address(a.xrpl):
+        sys.exit("error: --xrpl is not a valid XRPL classic address (base58 checksum failed): %r "
+                 "Nothing was built: a typo here would produce a memo for an account you do not "
+                 "control." % a.xrpl)
+
     # Derive the account and nonce from chain rather than guessing either.
     w3, mac, erc20 = _chain(a.rpc)
     pa = mac.functions.getPersonalAccount(a.xrpl).call()
@@ -491,7 +566,30 @@ def main():
         print(json.dumps(st, indent=2))
         return
 
+    # H1: open() reverts BadTier for an out-of-range or RETIRED tier, and tier 0 -- the default --
+    # can itself be retired. Read it rather than trusting the flag.
+    book_c = w3.eth.contract(address=to_checksum_address(a.book), abi=[
+        {"name": "tierCount", "type": "function", "stateMutability": "view",
+         "inputs": [{"type": "address"}], "outputs": [{"type": "uint256"}]},
+        {"name": "tierDisabled", "type": "function", "stateMutability": "view",
+         "inputs": [{"type": "address"}, {"type": "uint256"}], "outputs": [{"type": "bool"}]},
+        {"name": "paused", "type": "function", "stateMutability": "view",
+         "inputs": [], "outputs": [{"type": "bool"}]},
+        {"name": "minPrincipal", "type": "function", "stateMutability": "view",
+         "inputs": [], "outputs": [{"type": "uint128"}]},
+    ])
+    ntiers = book_c.functions.tierCount(to_checksum_address(a.fxrp)).call()
+    if a.tier >= ntiers:
+        sys.exit("error: --tier %d does not exist (this collateral has %d tiers, 0..%d). "
+                 "open() would revert BadTier." % (a.tier, ntiers, ntiers - 1))
+    if book_c.functions.tierDisabled(to_checksum_address(a.fxrp), a.tier).call():
+        sys.exit("error: --tier %d has been retired for this collateral. open() would revert "
+                 "BadTier. Pick another tier (0..%d)." % (a.tier, ntiers - 1))
+
     amount = int(round(a.amount * 1e6))
+    if amount <= 0:
+        sys.exit("error: --amount %r is too small to represent (rounds to 0 at 6 decimals). "
+                 "open() would revert BadParam." % a.amount)
     # The allowance decides whether there IS a setup step, and therefore which nonce the borrow must
     # be signed for. Passing it in rather than warning about it afterwards is F1.
     out = build(pa, amount, a.tier, nonce, book=a.book, fxrp=a.fxrp,
@@ -507,25 +605,22 @@ def main():
     # balance now plus whatever the two Payments mint. Stated rather than silently assumed, because
     # an insufficient balance reverts on chain after the XRP is gone.
     out["warnings"] = []
+    if book_c.functions.paused().call():
+        out["warnings"].append(
+            "The book is PAUSED right now, so the borrow memo would revert. Do not send it yet.")
     if out["setup_already_done"]:
         out["warnings"].append(
             "Allowance is already set, so there is no setup step. The single borrow memo above is "
             "already signed for the current nonce (%d) -- nothing to rebuild." % nonce)
     w = out.get("where_to_send")
     if w:
-        if w["agents_truncated"]:
-            out["warnings"].append(
-                "Showing %d of %d available agents (capped to keep this to one quick call)."
-                % (w["agents_listed"], w["agents_total_available"]))
-        if not any(g["usable"] for g in w["agents"]):
-            out["warnings"].append(
-                "No agent returned a checksum-valid XRPL address. Do NOT guess a destination.")
         n_pay = 2 if out["setup_required"] else 1
         out["warnings"].append(
-            "Every Payment must be a whole multiple of the %g XRP lot size, so this costs %d "
-            "Payment(s) of at least %g XRP each. The XRP in the setup Payment is not lost: it mints "
-            "FXRP into your personal account and the borrow can lock it."
-            % (w["lot_size_xrp"], n_pay, w["lot_size_xrp"]))
+            "Send to %s (the Core Vault, read from the contract). Every Payment must be a whole "
+            "multiple of the %g XRP lot size, so this costs %d Payment(s) of at least %g XRP each. "
+            "The XRP in the setup Payment is not lost: it mints FXRP into your personal account and "
+            "the borrow can lock it."
+            % (w["destination_xrpl_address"], w["lot_size_xrp"], n_pay, w["lot_size_xrp"]))
     if bal < amount:
         out["warnings"].append(
             "The account holds %.6f FXRP now but the borrow locks %.6f. The shortfall must be "
