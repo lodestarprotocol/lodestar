@@ -649,6 +649,7 @@ const RPCS=["https://coston2-api.flare.network/ext/C/rpc","https://rpc.ankr.com/
 const RPC=RPCS[0];
 const CHAIN_HEX="0x72", CHAIN_NAME="Flare Testnet Coston2";
 const CHAIN_DEC=parseInt(CHAIN_HEX,16);   // 114
+const NET_LABEL="Coston2 Testnet";        // badge text; change with CHAIN_* at switchover
 let WRONG_CHAIN=false;                    // set by verifyChain(); blocks every write
 // The wallet can sit on a different chain than the one we read from. Reads come from our own
 // Coston2 provider, so the whole UI stays populated and looks correct while the wallet is
@@ -656,9 +657,14 @@ let WRONG_CHAIN=false;                    // set by verifyChain(); blocks every 
 // what chain it is on; never infer it from a switch request having been sent.
 async function verifyChain(eip){
   try{
-    const id=await eip.request({method:"eth_chainId"});
-    const ok=parseInt(id,16)===CHAIN_DEC;
-    setWrongChain(!ok, parseInt(id,16));
+    const raw=await eip.request({method:"eth_chainId"});
+    // EIP-1193 mandates a hex string, but wallets in the wild return decimal strings and numbers.
+    // parseInt("114",16) is 276, which would lock the user out permanently with a tooltip claiming
+    // they are on chain 276.
+    const n = typeof raw==="number" ? raw : (/^0x/i.test(raw) ? parseInt(raw,16) : parseInt(raw,10));
+    const ok = n===CHAIN_DEC;
+    const id=n;
+    setWrongChain(!ok, id);
     return ok;
   }catch(_){ setWrongChain(true,null); return false; }
 }
@@ -666,9 +672,9 @@ function setWrongChain(bad, sawId){
   WRONG_CHAIN=!!bad;
   const badge=document.querySelector(".net.net-test");
   if(badge){
-    badge.innerHTML = bad
-      ? '<i></i> Wrong network'
-      : '<i></i> Coston2 Testnet';
+    // Driven off CHAIN_NAME: hardcoding "Coston2 Testnet" here would survive the mainnet
+    // switchover and relabel the badge on Flare mainnet. See MAINNET_SWITCHOVER.md.
+    badge.innerHTML = bad ? '<i></i> Wrong network' : '<i></i> '+esc(NET_LABEL);
     badge.style.color = bad ? "var(--red)" : "";
     badge.style.borderColor = bad ? "var(--red)" : "";
     badge.title = bad && sawId ? ("Wallet is on chainId "+sawId+"; Lodestar is on "+CHAIN_DEC) : "";
@@ -677,9 +683,13 @@ function setWrongChain(bad, sawId){
   if(bad){
     if(bb){ bb.disabled=true; bb.textContent="Wrong network"; }
     if(lb){ lb.disabled=true; lb.textContent="Wrong network"; }
-  }else if(account){
-    if(bb){ bb.disabled=false; bb.textContent="Borrow"; }
-    if(lb){ lb.disabled=false; lb.textContent="Supply USD\u20ae0"; }
+  }else{
+    // ONLY undo our own "Wrong network" state. This runs from sendTx's pre-signature re-check, i.e.
+    // while a transaction is in flight and busy() has disabled the button -- unconditionally
+    // re-enabling there put the button back to "Borrow" behind the open wallet prompt, and a second
+    // click was a second approve+borrow.
+    if(bb && bb.textContent==="Wrong network"){ bb.disabled=!account; bb.textContent=account?"Borrow":"Connect wallet"; }
+    if(lb && lb.textContent==="Wrong network"){ lb.disabled=!account; lb.textContent=account?"Supply USD\u20ae0":"Connect wallet"; }
   }
 }
 // Offer the switch, then VERIFY. A user can decline the prompt (4001), which the old code
@@ -953,7 +963,9 @@ async function loadChain(){
     // v1.9+: the floor `open()` ACTUALLY enforces, which ramps with book fullness. Absent on the
     // deployed v1.7 book, so this entry is allowed to fail and we fall back to the flat minimum.
     // Appended last for the same reason as maxActiveLoans: r[0..15] are read by fixed index.
-    {t:BOOK,i:IBOOK,f:"effectiveMinPrincipal",allowFail:true},
+    // mcOn already sets allowFailure=true for EVERY call, so a missing function on the
+    // deployed v1.7 book fails alone and the fallback below fires. No per-call key exists.
+    {t:BOOK,i:IBOOK,f:"effectiveMinPrincipal"},
   ];
   // Ask the oracle for the price of every collateral that exists on this network. This is the
   // exact number the contracts use for LTV, so the preview can never disagree with the borrow.
@@ -1127,7 +1139,13 @@ function disconnectWallet(){
   if($("pf-loans")) $("pf-loans").innerHTML=emptyHTML("Not connected","Connect a wallet to see your loans.");
   if($("pf-lend")) $("pf-lend").innerHTML=emptyHTML("Not connected","Connect a wallet to see your deposit.");
   if($("pf-sub")) $("pf-sub").textContent="connect a wallet to view";
+  // Clear the wrong-network state and hand the buttons back explicitly. Ordering matters: the
+  // re-enable branch is keyed off `account`, so calling this after nulling it left two dead buttons
+  // reading "Connect wallet" until a page reload.
   setWrongChain(false,null);
+  if($("borrowBtn")){ $("borrowBtn").disabled=false; $("borrowBtn").textContent="Connect wallet"; }
+  if($("lendBtn")){ $("lendBtn").disabled=false; $("lendBtn").textContent="Connect wallet"; }
+  currentEip=null;
 }
 // The wallet keeps whichever RPC it was handed when the network was first added, so hand it the one
 // that is answering right now rather than a static guess that may have died since.
@@ -1255,13 +1273,21 @@ function friendlyErr(e){
   // decode a named custom error (the ABI carries the error fragments) into plain English
     // Declining in the wallet is not a failure and must not render as a red error; it is the most
   // common "error" in any dapp. Callers treat null as "say nothing".
-  if(e&&(e.code==="ACTION_REJECTED"||e.code===4001)) return null;
-  const m0=(errMsg(e)||"").toLowerCase();
-  if(m0.includes("insufficient funds")) return "You need C2FLR to pay gas. Get some from the <a href=\"https://faucet.flare.network/coston2\" target=\"_blank\" rel=\"noopener\">Coston2 faucet</a>, then try again.";
+  // Rejections arrive in several shapes. ethers surfaces a WalletConnect/Rabby rejection it cannot
+  // coalesce as {code:"UNKNOWN_ERROR", info:{error:{code:4001}}}, and "could not coalesce" is in the
+  // RPC-busy list below -- so without this the user cancels and is told the testnet is broken, which
+  // is the exact toast this change existed to stop.
+  if(e&&(e.code==="ACTION_REJECTED"||e.code===4001
+        ||(e.info&&e.info.error&&e.info.error.code===4001)
+        ||/user (rejected|denied|cancell?ed)/i.test(errMsg(e)||""))) return null;
   // `e.info.error.data` was ANDed with null here, which always discarded it — the exact gap that
   // produced "unknown custom error" for every pool revert.
   const nm=e&&(e.revert&&e.revert.name||null);
   if(nm){ const map={BadParam:"Amount is outside the allowed range — check the minimum loan size.",Paused:"Borrowing is paused right now.",CapExceeded:"This market has reached its cap.",Undercollateralized:"Not enough collateral at current prices. Top up collateral, then try again.",NotSupported:"This collateral isn't live yet.",OracleDown:"Price feed is briefly unavailable, try again shortly.",TooManyActiveLoans:"The book is at capacity, try again shortly.",NotActive:"This loan is no longer active.",Defaulted:"This loan has already defaulted.",Expired:"Too late to extend: the deadline has passed, or this extension would go past the 90-day maximum loan life.",NotBorrower:"Only the loan's borrower can extend it.",BadTier:"That term isn't available for this collateral.",StalePrice:"Price feed is briefly unavailable, try again shortly.",FeedNotSet:"Price feed is briefly unavailable, try again shortly.",BadPrice:"Price feed is briefly unavailable, try again shortly.",InsufficientLiquidity:"Not enough idle liquidity in the pool right now. Funds are lent out and free up as loans repay — try a smaller amount, or again shortly.",OverUtilized:"That amount would push the pool past its utilization ceiling. A smaller amount will go through.",NotLoanBook:"Internal: that call must come from the loan book.",Slippage:"Price moved while the transaction was in flight. Try again.",AlreadySet:"That value has already been set."}; if(map[nm]) return map[nm]; }
+  // Below the decode on purpose: a named revert is ground truth and must beat a substring match.
+  // "insufficient funds" is the most generic phrase in EVM tooling.
+  if(e&&(e.code==="INSUFFICIENT_FUNDS")||/insufficient funds for/i.test(errMsg(e)||""))
+    return "You need C2FLR to pay gas. Get some from the <a href=\"https://faucet.flare.network/coston2\" target=\"_blank\" rel=\"noopener\">Coston2 faucet</a>, then try again.";
   const m=(errMsg(e)||"").toLowerCase();
   if(m.includes("missing revert data")||m.includes("429")||m.includes("too many")||m.includes("failed to fetch")||m.includes("timeout")||m.includes("could not coalesce")||(e&&(e.code==="SERVER_ERROR"||e.code==="TIMEOUT"||e.code==="NETWORK_ERROR")))
     // name the endpoint that is answering right now — a hardcoded one is wrong on the day it goes down
@@ -1292,9 +1318,19 @@ async function sendTx(c,fn,...args){
   }
   return c[fn](...args,ov);
 }
+// Every write must be gated, not just the two on the main forms. approve() calls go straight
+// through C(addr, ERC20_ABI) and never touch sendTx, and Repay / Pay-down / Extend / Top-up live in
+// portfolio rows whose buttons setWrongChain never sees. Without this a user on the wrong chain can
+// still sign an ERC20 approval to an address we do not control on that chain.
+async function requireChain(){
+  if(!currentEip) return;                       // read-only session; no signer to protect
+  if(!(await verifyChain(currentEip)))
+    throw Object.assign(new Error("Wrong network — switch your wallet to "+CHAIN_NAME+" (chainId "+CHAIN_DEC+")"),{code:"WRONG_CHAIN"});
+}
 function busy(b,t){b.disabled=true;b.dataset.t=b.textContent;b.textContent=t;}
 function unbusy(b,t){b.disabled=false;b.textContent=t||b.dataset.t;}
 window.doBorrow=async()=>{
+  try{ await requireChain(); }catch(e){ toastErr("Cannot transact",e); return; }
   if(!account) return openWalletPicker();
   const m=MK[COLL]; if(!m.live){ toast(m.name+" is coming soon on Coston2."); return; }
   const btn=$("borrowBtn"), amt=u6($("amt").value);
@@ -1338,6 +1374,7 @@ window.doBorrow=async()=>{
   }catch(e){ unbusy(btn,"Borrow"); console.error(e); toastErr("Borrow failed",e); }
 };
 window.doDeposit=async()=>{
+  try{ await requireChain(); }catch(e){ toastErr("Cannot transact",e); return; }
   if(!account) return openWalletPicker();
   const btn=$("lendBtn"), amt=u6($("lamt").value);
   if(amt<=0n){ toast("Enter a deposit amount."); return; }
@@ -1350,6 +1387,7 @@ window.doDeposit=async()=>{
   }catch(e){ unbusy(btn,"Supply USD₮0"); console.error(e); toastErr("Deposit failed",e); }
 };
 window.doRepay=async(id,due)=>{
+  try{ await requireChain(); }catch(e){ toastErr("Cannot transact",e); return; }
   if(!account) return openWalletPicker();
   try{
     const tok=C(USDT0_ADDR,ERC20_ABI), book=C(BOOK,BOOK_ABI), need=BigInt(due);
@@ -1361,6 +1399,7 @@ window.doRepay=async(id,due)=>{
 };
 window.togglePartial=(id)=>{ const p=vEl("prp-"+id); if(!p) return; const open=p.style.display!=="none"; const x=vEl("exp-"+id); if(x) x.style.display="none"; p.style.display=open?"none":"flex"; if(!open){ const i=vEl("pr-"+id); if(i) i.focus(); } };
 window.doPartial=async(id,principalStr)=>{
+  try{ await requireChain(); }catch(e){ toastErr("Cannot transact",e); return; }
   if(!account) return openWalletPicker();
   const el=vEl("pr-"+id), v=parseFloat(el&&el.value);
   if(!(v>0)){ toast("Enter a USD₮0 amount to pay down.","err"); return; }
@@ -1368,8 +1407,11 @@ window.doPartial=async(id,principalStr)=>{
   if(amt>=principal){ toast("That covers the whole loan — use Repay to close it.","err"); return; }
   try{
     const tok=C(USDT0_ADDR,ERC20_ABI), book=C(BOOK,BOOK_ABI);
-    // Read the enforced floor, falling back for books that predate it.
-    let minP; try{ minP=await book.effectiveMinPrincipal(); }catch(_){ minP=await book.minPrincipal(); }
+    // FLAT floor on purpose. This call passes collateralOut = 0, and the contract uses
+    //   floorNow = collateralOut > 0 ? effectiveMinPrincipal() : minPrincipal
+    // precisely so a borrower de-risking is never blocked because strangers filled the book.
+    // Reading the ramped floor here would re-impose that trap in the client.
+    const minP=await book.minPrincipal();
     if(principal-amt<minP){ toast("Leave at least "+usd(Number(minP)/1e6)+" owed, or use Repay to close the loan.","err"); return; }
     if(await tok.balanceOf(account)<amt){ toast("You need "+usd(v)+" USD₮0 for this pay-down.","err"); return; }
     if(await tok.allowance(account,POOL)<amt){ toast("Approve USD₮0…"); await (await tok.approve(POOL,amt)).wait(); }
@@ -1442,6 +1484,7 @@ window.renderExtend=async(id)=>{
   }catch(e){ console.error("extend",e); b.textContent="Couldn't load terms. "+(friendlyErr(e)||"Cancelled."); }
 };
 window.doExtend=async(id,tier,feeStr,newDue)=>{
+  try{ await requireChain(); }catch(e){ toastErr("Cannot transact",e); return; }
   if(!account) return openWalletPicker();
   try{
     const fee=BigInt(feeStr), tok=C(USDT0_ADDR,ERC20_ABI), book=C(BOOK,BOOK_ABI);
@@ -1454,6 +1497,7 @@ window.doExtend=async(id,tier,feeStr,newDue)=>{
   }catch(e){ console.error(e); toastErr("Extend failed",e); }
 };
 window.doTopUp=async(id)=>{
+  try{ await requireChain(); }catch(e){ toastErr("Cannot transact",e); return; }
   if(!account) return openWalletPicker();
   const L=EXT[id]; if(!L) return;
   const el=vEl("ext-"+id), v=parseFloat(el&&el.value);
@@ -1472,6 +1516,7 @@ window.doTopUp=async(id)=>{
   }catch(e){ console.error(e); toastErr("Top-up failed",e); }
 };
 window.doWithdraw=async()=>{
+  try{ await requireChain(); }catch(e){ toastErr("Cannot transact",e); return; }
   if(!account) return;
   try{ const pool=C(POOL,POOLW_ABI); const sh=await pool.balanceOf(account); toast("Withdrawing…"); await (await sendTx(pool,"redeem",sh,account,account)).wait(); toast("Withdrawn to your wallet.","ok"); refreshAll(); }
   catch(e){ console.error(e); toastErr("Withdraw failed",e); }
