@@ -1,15 +1,32 @@
 # Lodestar — audit scope
 
-**Commit: `e0ac90e` — `Slot-exhaustion premium: price the last slots so the book can't be squatted`**
-Repo: `github.com/lodestarprotocol/lodestar`, branch `main`. Prepared 2026-08-06, re-pinned 2026-08-07.
+**Commit: `32e6e1c` — `Remove the slot-premium ramp; pin the launch config in the deploy script`**
+Repo: `github.com/lodestarprotocol/lodestar`, branch `main`. Prepared 2026-08-06, re-pinned 2026-08-08.
 
 The pin refers to the state of `src/`. Later commits on `main` may touch this document, the dapp
-or tests without changing `src/`; verify with `git diff e0ac90e..main -- src/`, which must be
-empty. Reviewing `main` at or after `e0ac90e` therefore reviews the same contracts.
+or tests without changing `src/`; verify with `git diff 32e6e1c..main -- src/`, which must be
+empty. Reviewing `main` at or after `32e6e1c` therefore reviews the same contracts.
 
-This supersedes `43ee872`, `1a66b01` and `c0fc6b1a`. Two Solidity deltas since `1a66b01`, both in
-`LodestarLoanBook.sol` and both described below: the first-loss buffer (§4) and the slot-exhaustion
-premium (§4b). Everything else in the intervening commits is dapp, docs or tests.
+This supersedes `43ee872`, `1a66b01`, `c0fc6b1a` and `e0ac90e`. Two Solidity deltas since
+`1a66b01`, both in `LodestarLoanBook.sol` and both described below: the first-loss buffer (§4) and
+the `open()` slippage bound and deadline (§4b). Everything else in the intervening commits is dapp,
+docs, tools or tests.
+
+> **If you are comparing against an earlier draft of this document.** Commits `e0ac90e`, `a878a31`
+> and `6d2b67a` added a *slot-exhaustion premium* — a `minPrincipal` that ramped quadratically with
+> book fullness — and then two corrections to it. **All of it has been removed.** There is no
+> `slotPremiumBps`, no `effectiveMinPrincipal()` and no `openFloor` in the code under review, and
+> the section that described them is deliberately gone rather than marked obsolete.
+>
+> It was withdrawn on three grounds: the threat is unreachable at launch (the $25k per-collateral
+> exposure cap runs out after ~250 loans of $100, before the 400-slot ceiling — asserted in
+> `test/LaunchConfig.t.sol`); being quadratic in fullness, the floor had already doubled *for every
+> borrower* at one third occupancy, which made pricing out small borrowers cheaper rather than
+> dearer; and two independent review passes each found a way around a version we believed correct
+> (a `partialRepay` claw-back that made the premium refundable, then a fix for that which trapped
+> honest borrowers). `minPrincipal` is flat again, and slot exhaustion is priced by
+> `minPrincipal * maxActiveLoans` of the griefer's own over-collateralized capital, locked for the
+> term, with `setMinPrincipal` (bounded to $10k) as the reactive lever.
 
 ---
 
@@ -90,76 +107,86 @@ was already solvent, i.e. exactly when the buffer was not needed.
 
 ---
 
-## 4b. Delta since `c0fc6b1a` — the slot-exhaustion premium
+## 4b. Delta since `c0fc6b1a` — a slippage bound and a deadline on `open()`
 
-**Solidity: 41 insertions, 1 changed line, entirely in `LodestarLoanBook.sol`.** Plus an explicit
-`setSlotPremiumBps` call in `script/DeployMainnet.s.sol` (out of scope, listed for completeness).
+**Solidity: 51 insertions, 2 deletions, entirely in `LodestarLoanBook.sol`.** Everything else in the
+intervening commits is dapp, docs, tools or tests.
 
-Adds `slotPremiumBps` (one `uint32`) and `effectiveMinPrincipal()`:
+`open()` previously had neither, so the terms of a borrow were decided entirely at execution time by
+whoever submitted the transaction: collateral is priced at the FTSOv2 reading at the moment of
+inclusion. For a wallet user clicking Borrow that window is seconds. For the XRPL flow — where a
+user signs an XRPL payment and an executor relays it to Flare whenever it suits them — it is
+unbounded, and a submitter can wait for a local low and underwrite the loan smaller. There is no
+direct profit in doing so, which makes it griefing rather than theft, but *"you know your terms up
+front"* is a core claim of this protocol and without these it was not true.
 
 ```solidity
-function effectiveMinPrincipal() public view returns (uint256) {
-    uint256 cap = maxActiveLoans;
-    if (slotPremiumBps == 0 || cap == 0) return minPrincipal;
-    uint256 used = activeLoanIds.length;
-    if (used > cap) used = cap;
-    return uint256(minPrincipal)
-        + (uint256(minPrincipal) * slotPremiumBps * used * used) / (cap * cap * 10_000);
+function open(address collateral, uint256 collAmount, uint256 tierIndex)
+    external nonReentrant returns (uint256 id)
+{
+    return _open(collateral, collAmount, tierIndex);
+}
+
+function open(
+    address collateral, uint256 collAmount, uint256 tierIndex,
+    uint256 minOut, uint256 deadline
+) external nonReentrant returns (uint256 id) {
+    if (deadline != 0 && block.timestamp > deadline) revert Expired();
+    id = _open(collateral, collAmount, tierIndex);
+    if (minOut != 0) {
+        Loan storage L = loans[id];
+        if (uint256(L.principal) - uint256(L.fee) < minOut) revert Slippage();
+    }
 }
 ```
 
-`open()` now checks `principal < effectiveMinPrincipal()` instead of `principal < minPrincipal`.
-Nothing else changed.
+Properties worth checking:
 
-**Why it exists.** The book holds at most `maxActiveLoans` (400) concurrent loans and a single loan
-floors at `minPrincipal` ($100 at launch), so a griefer could occupy every slot for ~$40k of
-borrowing and ~$800 of fees and block all new borrowing. This is the only capacity attack that
-cannot be undone reactively: exposure-cap exhaustion is cleared by one `setExposureCap` call, but
-`maxActiveLoans` is hard-bounded to `[50, 400]` so it cannot be raised out of the way, and squatted
-loans persist to maturity — up to 30 days on the long tier. Raising `minPrincipal` afterwards only
-blocks new dust; it cannot evict a loan that already holds a slot.
+- **The 3-argument form is preserved verbatim** and delegates with both guards disabled, so every
+  existing caller behaves exactly as before. `0` means unconstrained for both parameters, which is
+  what makes that delegation exact. `test_ThreeArgFormIsIdenticalToUnconstrainedFiveArg`.
+- **`minOut` is measured on what the borrower RECEIVES** (`principal - fee`), not on `principal`.
+  Binding it to principal would silently under-protect by the fee.
+  `test_MinOutIsMeasuredOnReceivedNotPrincipal`.
+- **`minOut` is checked *after* `_open` rather than before.** Reverting unwinds the whole call, so
+  this is equivalent to checking before — and it keeps `_open`'s body and stack profile byte-for-byte
+  what they were. This contract is compiled **without via-IR by choice**; one more local in `_open`
+  overflows the stack. Same reason `deadline` is checked in the wrapper.
+- **Both externals are `nonReentrant` and share one internal body.** If one delegated to the other
+  the guard would re-enter and every call would revert. `test_BothEntrypointsWorkBackToBack`.
+- **The deadline is `>` not `>=`**, so a borrow included in the very block the user nominated is
+  honoured. `test_DeadlineExactlyNowIsAccepted`.
 
-**Points a reviewer should press on:**
+11 tests in `test/security/OpenGuards.t.sol`, including
+`test_PriceDropBetweenQuoteAndExecutionIsRefused` (the actual scenario) and
+`test_MinOutOneWeiAboveReceivedReverts` (the boundary).
 
-- **Quadratic, not linear, and why.** A linear ramp reaches $212 at 50/400 loans, taxing ordinary
-  borrowers. Squared it is $114 at 50/400, and $995 at the final slot -- `used` excludes the loan
-  being opened, so the last slot pays (cap-1)^2/cap^2 = 99.5% of the maximum, not 100%. That is
-  deliberate: pricing on the book as it stands keeps `minPrincipal` reachable on an empty book,
-  which is the floor a borrower is quoted. Monotonic non-decreasing in `activeLoanIds.length`.
-- **No new invariant to maintain.** The value is a pure function of state `open()` already reads.
-  A reserved-slot quota was the alternative and was rejected: it needs a counter kept correct across
-  open, repay, partialRepay, settle and default, and each path is a chance to desync.
-- **It gates `open()` only.** `partialRepay` keeps the flat `minPrincipal` floor deliberately —
-  paying a loan DOWN consumes no slot, and applying the ramp there would trap a borrower because
-  strangers filled the book. Asserted by `test_PartialRepayUsesFlatFloor_EvenWhenBookIsFull`.
-- **Overflow.** `minPrincipal` is bounded by `setMinPrincipal` to `10_000 * stableUnit`, so the
-  ceiling depends on the pool asset's decimals: 1e10 for a 6-decimal stable (USD₮0, the deployed
-  case) and 1e22 for an 18-decimal one. With `slotPremiumBps <= 200_000` and
-  `used*used <= cap*cap <= 160_000`, the intermediate peaks at 3.2e20 in the 6dp case and 3.2e32 in
-  the worst 18dp case, both far below `uint256` (~1.16e77). Asserted by
-  `test_NoOverflowAtExtremeParameters` (a FULL book at both setter ceilings, not an empty one) and
-  `test_OverflowHeadroomIsStatedCorrectly`.
-- **Clamp.** `maxActiveLoans` can be lowered below the live book size; `used` is clamped to `cap` so
-  the premium saturates rather than exceeding its bound. Asserted by
-  `test_CapLoweredBelowBookDoesNotBreakTheView`.
-- **Disable path.** `slotPremiumBps = 0` restores the previous behaviour exactly, asserted by
-  `test_ZeroPremiumRestoresExactOldBehaviour`.
-
-Launch value is `90_000` (9x at a full book), set explicitly in `DeployMainnet`.
+*Deploy-script changes, out of scope, listed for completeness:* `DeployMainnet` now sets
+`maxActiveLoans` to 400 explicitly (the constructor default is 300), sets the published risk numbers
+explicitly rather than inheriting constructor defaults, and calls `setPaused(true)` before the
+multisig handover. `test/LaunchConfig.t.sol` pins those constants.
 
 ---
 
+
 ## 5. Tests
 
-**256 non-fork tests, 0 failures.** (244 at `c0fc6b1a`, plus 11 in `test/security/SlotPremium.t.sol` covering the premium's properties and 1 gas-ceiling measurement in `test/SweepGasCeiling.t.sol`.) Plus 10 fork tests against live Flare mainnet state (one heavy
-Algebra 2-hop test is gated behind `HEAVY_FORK=1`; it 429s on public RPCs).
+**262 non-fork tests, 0 failures** (verified 2026-08-08 at `32e6e1c`). 244 at `c0fc6b1a`; since then
++11 in `test/security/OpenGuards.t.sol` (§4b), +3 in `test/LaunchConfig.t.sol`, +3 in
+`test/XrplMemoReference.t.sol` (out-of-scope tooling) and +1 gas-ceiling measurement in
+`test/SweepGasCeiling.t.sol` — the ~9.9M-gas mass-crash exit sweep that justifies capping
+`maxActiveLoans` at 400. Plus **19 fork tests** against live Flare and Coston2 state (one heavy
+Algebra 2-hop test is gated behind `HEAVY_FORK=1`; it 429s on public RPCs). Those include the XRPL
+borrow flow driven through Flare's real deployed Smart Accounts controller
+(`test/fork/SmartAccountBorrow.t.sol`, `test/fork/XrplEndToEnd.t.sol`) and a 400-loan exit-sweep
+ceiling measurement (`test/fork/ActiveLoanCeiling.t.sol`).
 
 Four invariant campaigns run **128,000 calls each with 0 reverts**, covering system solvency,
 `totalAssets` underflow, no-free-value-extraction, no-double-resolution, custody of collateral and
 stable, the active-loan array, and `reserveFloor <= reserveBalance`.
 
 ```
-forge test --no-match-path "test/fork/*"        # 244 pass
+forge test --no-match-path "test/fork/*"        # 262 pass
 FORK_RPC=<flare rpc> forge test --match-path "test/fork/*"
 ```
 
