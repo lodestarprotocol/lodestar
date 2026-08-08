@@ -37,3 +37,18 @@ web/v-*.png
 web/view-*.png
 web/lodestar-*.png
 web/belay-shot.png
+
+# Never publish: this repo is PUBLIC (verified 2026-08-08, api.github.com visibility=public).
+# quest/ holds campaign_report.csv, a per-wallet dossier on ~1,200 real testnet participants.
+# It has never been committed, but nothing was stopping a `git add -A` from doing it.
+quest/
+SOCIAL_QUEUE.md
+tools/__pycache__/
+.ltvtmp/
+
+# Operational runbooks. LAUNCH_RUNBOOK.md named the deploy wallet, the on-disk path of the deployer
+# key, and the fact that all five multisig signer keys live in one folder on one machine. That is a
+# targeting package, not a secret leak -- no key material was ever in the repo -- but it tells an
+# attacker exactly which machine and which files yield the whole multisig. Untracked; treat the
+# contents as permanently disclosed and re-key before mainnet.
+LAUNCH_RUNBOOK.md
