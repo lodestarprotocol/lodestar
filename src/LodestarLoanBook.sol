@@ -447,9 +447,52 @@ contract LodestarLoanBook is Ownable2Step, ReentrancyGuard {
     }
 
     // ------------------------------------------------------------------ borrow
+    /// @notice Open a loan. Kept for callers built against the original signature; both guards are
+    ///         disabled, so this behaves exactly as it always has.
+    /// @dev Prefer the 5-argument overload. Submitting without a deadline lets whoever includes the
+    ///      transaction choose the moment your collateral is priced.
     function open(address collateral, uint256 collAmount, uint256 tierIndex)
         external
         nonReentrant
+        returns (uint256 id)
+    {
+        return _open(collateral, collAmount, tierIndex);
+    }
+
+    /// @notice Open a loan with the terms you were quoted, or not at all.
+    /// @param minOut   Minimum stable the borrower must RECEIVE (principal net of the one-time fee).
+    ///                 0 disables the check. Reverts `Slippage()` if the price moved against you.
+    /// @param deadline Latest block timestamp this may execute at. 0 disables the check. Reverts
+    ///                 `Expired()` afterwards, so a stale signed intent cannot be executed later at a
+    ///                 price of the submitter's choosing.
+    /// @dev Both externals are `nonReentrant` and share `_open`; one delegating to the other would
+    ///      re-enter the guard and revert.
+    function open(
+        address collateral,
+        uint256 collAmount,
+        uint256 tierIndex,
+        uint256 minOut,
+        uint256 deadline
+    ) external nonReentrant returns (uint256 id) {
+        // Checked here rather than inside `_open`: it needs no state, it is the cheapest possible
+        // rejection, and keeping it out of the shared body keeps that body under the stack limit
+        // (this contract is compiled without via-IR on purpose).
+        if (deadline != 0 && block.timestamp > deadline) revert Expired();
+        id = _open(collateral, collAmount, tierIndex);
+        // Bound the amount actually DISBURSED, not the principal: the fee is netted at disbursement,
+        // so `principal - fee` is the figure the borrower was quoted. Reverting here unwinds the
+        // whole open, so checking after is equivalent to checking before and keeps `_open` untouched.
+        if (minOut != 0) {
+            Loan storage L = loans[id];
+            if (uint256(L.principal) - uint256(L.fee) < minOut) revert Slippage();
+        }
+    }
+
+    /// @dev The original `open` body, unchanged. Kept free of the new parameters so its stack
+    ///      profile is exactly what it was: this contract compiles without via-IR by choice, and
+    ///      adding even one more local here overflows the stack.
+    function _open(address collateral, uint256 collAmount, uint256 tierIndex)
+        internal
         returns (uint256 id)
     {
         if (paused) revert Paused();
